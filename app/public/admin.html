@@ -114,7 +114,7 @@
   </section>
 
   <section class="card">
-    <h2>Regulatory reporting <span class="muted" style="text-transform:none;letter-spacing:0">(daily EOD at 20:00 ET, monthly, or on demand)</span></h2>
+    <h2>Regulatory reporting <span class="muted" style="text-transform:none;letter-spacing:0">(daily EOD at 20:00 ET, monthly, or on demand · <a href="/reports.html" style="color:var(--accent)">open reports dashboard →</a>)</span></h2>
     <div class="row" style="margin-bottom:10px">
       <button class="secondary" data-rep="today">Today</button>
       <button class="secondary" data-rep="yesterday">Yesterday</button>
@@ -240,7 +240,7 @@ function renderReports(r) {
   if (!r.reports.length) { body.innerHTML = `<tr><td colspan="7" class="muted">No reports yet.</td></tr>`; return; }
   const et = (ts) => new Date(ts*1000).toLocaleString("en-US", { timeZone: "America/New_York", month:"short", day:"numeric", hour:"2-digit", minute:"2-digit", hour12:false });
   body.innerHTML = r.reports.map(x => `<tr>
-    <td class="mono">${x.id}</td><td>${x.type}</td><td>${et(x.from)} → ${et(x.to)}</td><td>${x.trades}</td><td>${et(x.generatedAt)} · ${x.generatedBy.split(" (")[0]}</td>
+    <td class="mono"><a href="/reports.html#${x.id}" style="color:var(--accent);text-decoration:none">${x.id}</a></td><td>${x.type}</td><td>${et(x.from)} → ${et(x.to)}</td><td>${x.trades}</td><td>${et(x.generatedAt)} · ${x.generatedBy.split(" (")[0]}</td>
     <td>${x.files.map(f => `<a href="/reports/${x.id}/${f}" target="_blank" style="color:var(--accent);text-decoration:none;margin-right:6px">${f.replace(/\.(csv|json|html)$/, m => m.toUpperCase())}</a>`).join("")}</td>
     <td class="mono" title="signature ${x.signature}">${x.hash.slice(0,12)}…</td></tr>`).join("");
 }

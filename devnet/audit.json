@@ -12,5 +12,11 @@
     "action": "TRADING_RESUME",
     "details": "manual",
     "signature": "57zbbFUJTio8hMDaWoAmstfpd5vr9SCR4YsgGZa8SxPGb8s9Q7oatM3gxkb4HtMnjW3uZtqA8EhPrUmNS1T2uT2t"
+  },
+  {
+    "ts": 1790710183,
+    "actor": "compliance officer (admin console)",
+    "action": "REGULATORY_REPORT",
+    "details": "month-2026-09-01-0001: 7 trades, 0 rejections, 2 events; sha256 dc81e4b928bd4c04…"
   }
 ]

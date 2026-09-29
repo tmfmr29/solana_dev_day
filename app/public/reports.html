@@ -1,0 +1,177 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+<title>TSV Regulatory Reports</title><link rel="icon" href="/icon.svg">
+<script src="https://unpkg.com/tweetnacl@1.0.3/nacl-fast.min.js"></script>
+<style>
+  :root { --bg:#0b1220; --card:#121a2b; --line:#233049; --text:#e6edf7; --muted:#8a9bb8; --ok:#4ade80; --bad:#f87171; --warn:#fbbf24; --accent:#60a5fa; }
+  * { box-sizing:border-box; } body { margin:0; background:var(--bg); color:var(--text); font:15px/1.5 -apple-system,BlinkMacSystemFont,"Segoe UI",Inter,sans-serif; }
+  a { color:var(--accent); text-decoration:none; }
+  header { display:flex; align-items:center; justify-content:space-between; padding:14px 20px; border-bottom:1px solid var(--line); gap:10px; flex-wrap:wrap; }
+  header h1 { font-size:17px; margin:0; } header h1 span { color:var(--muted); font-weight:400; }
+  .layout { display:grid; grid-template-columns:300px minmax(0,1fr); gap:16px; max-width:1400px; margin:0 auto; padding:16px; }
+  @media (max-width:900px){ .layout { grid-template-columns:1fr; } }
+  .rail { background:var(--card); border:1px solid var(--line); border-radius:14px; padding:12px; max-height:calc(100vh - 100px); overflow:auto; }
+  .rail h2, .card h2 { margin:0 0 10px; font-size:12px; text-transform:uppercase; letter-spacing:.8px; color:var(--muted); display:flex; justify-content:space-between; align-items:center; }
+  .rep { display:block; padding:10px 12px; border-radius:10px; border:1px solid transparent; cursor:pointer; margin-bottom:6px; }
+  .rep:hover { border-color:var(--line); } .rep.on { background:#0b1220; border-color:var(--accent); }
+  .rep .t { font-weight:600; font-size:13px; } .rep .s { color:var(--muted); font-size:12px; }
+  .tag { display:inline-block; font-size:10px; padding:2px 7px; border-radius:999px; border:1px solid var(--line); color:var(--muted); margin-left:6px; text-transform:uppercase; }
+  .card { background:var(--card); border:1px solid var(--line); border-radius:14px; padding:18px; margin-bottom:16px; min-width:0; }
+  .tiles { display:grid; grid-template-columns:repeat(auto-fit,minmax(150px,1fr)); gap:10px; }
+  .tile { background:#0b1220; border:1px solid var(--line); border-radius:12px; padding:12px; }
+  .tile .l { color:var(--muted); font-size:11px; text-transform:uppercase; letter-spacing:.6px; } .tile .v { font-size:20px; font-weight:600; } .tile .s { color:var(--muted); font-size:12px; }
+  .kv { display:grid; grid-template-columns:auto 1fr; gap:5px 14px; font-size:14px; } .kv .l { color:var(--muted); }
+  table { width:100%; border-collapse:collapse; font-size:13px; } th, td { text-align:left; padding:8px 7px; border-bottom:1px solid var(--line); vertical-align:top; }
+  th { color:var(--muted); font-weight:500; font-size:11px; text-transform:uppercase; letter-spacing:.6px; white-space:nowrap; }
+  .mono { font-family:ui-monospace,SFMono-Regular,Menlo,monospace; font-size:12px; word-break:break-all; } .muted { color:var(--muted); }
+  .ok { color:var(--ok); } .bad { color:var(--bad); } .warn { color:var(--warn); }
+  .pill { display:inline-block; padding:3px 9px; border-radius:999px; font-size:11px; font-weight:600; border:1px solid var(--line); }
+  .pill.g { color:var(--ok); border-color:var(--ok); } .pill.r { color:var(--bad); border-color:var(--bad); } .pill.y { color:var(--warn); border-color:var(--warn); }
+  button { background:var(--accent); color:#04111f; border:0; border-radius:10px; padding:9px 14px; font-weight:600; font-size:14px; cursor:pointer; }
+  button.secondary { background:transparent; color:var(--text); border:1px solid var(--line); }
+  .bars { display:grid; gap:6px; } .bar { display:grid; grid-template-columns:110px 1fr 90px; align-items:center; gap:10px; font-size:13px; }
+  .bar .track { height:14px; background:#0b1220; border:1px solid var(--line); border-radius:6px; overflow:hidden; } .bar .fill { height:100%; background:var(--accent); }
+  .empty { color:var(--muted); padding:8px 0; }
+  .scroll { overflow:auto; max-height:420px; }
+  .verify { border:1px solid var(--line); border-radius:12px; padding:14px; background:#0b1220; }
+  .verify.good { border-color:var(--ok); } .verify.badv { border-color:var(--bad); }
+  .links a { margin-right:10px; }
+</style></head>
+<body>
+<header>
+  <h1>Regulatory Reports <span>· compliance officer view</span></h1>
+  <div class="links"><a href="/admin.html">Admin console</a><a href="/tape.html">Public tape</a><a href="/">Engineering view</a></div>
+</header>
+<div class="layout">
+  <aside class="rail">
+    <h2>Reports <span id="count" class="muted"></span></h2>
+    <div class="links" style="margin-bottom:10px"><button class="secondary" style="padding:6px 10px;font-size:13px" data-gen="today">Generate today</button> <button class="secondary" style="padding:6px 10px;font-size:13px" data-gen="since_last">Since last</button></div>
+    <div id="list"><div class="empty">No reports yet. Generate one from the admin console or the buttons above.</div></div>
+  </aside>
+  <main id="main"><div class="card"><div class="empty">Select a report.</div></div></main>
+</div>
+<script>
+const $ = (id) => document.getElementById(id);
+const fmt = (n, d = 2) => Number(n).toLocaleString(undefined, { minimumFractionDigits: d, maximumFractionDigits: d });
+const et = (iso) => new Date(iso).toLocaleString("en-US", { timeZone: "America/New_York", month: "short", day: "numeric", year: "numeric", hour: "2-digit", minute: "2-digit", hour12: false }) + " ET";
+const short = (s) => s.slice(0, 6) + "…" + s.slice(-6);
+const txLink = (sig) => `https://explorer.solana.com/tx/${sig}?cluster=devnet`;
+const esc = (v) => String(v ?? "").replace(/&/g, "&amp;").replace(/</g, "&lt;");
+let reports = [], current = null;
+
+async function loadList() {
+  const r = await fetch("/api/admin/reports").then(r => r.json());
+  reports = r.reports; $("count").textContent = reports.length ? `${reports.length}` : "";
+  $("list").innerHTML = reports.length ? reports.map(x => `<a class="rep ${current === x.id ? "on" : ""}" href="#${x.id}"><div class="t">${x.id}<span class="tag">${x.type}</span></div><div class="s">${et(x.from*1000)} → ${et(x.to*1000)}</div><div class="s">${x.trades} trades · ${x.generatedBy.split(" (")[0]}</div></a>`).join("")
+    : `<div class="empty">No reports yet.</div>`;
+  if (!current && reports.length) location.hash = reports[0].id;
+}
+
+async function show(id) {
+  current = id; document.querySelectorAll(".rep").forEach(e => e.classList.toggle("on", e.getAttribute("href") === "#" + id));
+  const r = await fetch(`/reports/${id}/report.json`).then(r => r.json());
+  const meta = reports.find(x => x.id === id);
+  const s = r.summary, h = r.report;
+  const days = r.daily_summary, maxVol = Math.max(1e-9, ...days.map(d => d.share_volume));
+  const pill = (cond, good, badTxt) => cond ? `<span class="pill r">${badTxt}</span>` : `<span class="pill g">${good}</span>`;
+  $("main").innerHTML = `
+  <div class="card">
+    <h2>${esc(h.id)} <span class="links"><a href="/reports/${id}/report.html" target="_blank">Print view</a><a href="/reports/${id}/report.json" target="_blank">JSON</a><a href="/reports/${id}/trade_blotter.csv">Blotter CSV</a><a href="/reports/${id}/daily_summary.csv">Daily CSV</a><a href="/reports/${id}/compliance_events.csv">Events CSV</a><a href="/reports/${id}/rejected_orders.csv">Rejections CSV</a></span></h2>
+    <div class="kv">
+      <span class="l">Venue</span><span>${esc(h.venue)}</span>
+      <span class="l">Period</span><span>${et(h.period_start_utc)} → ${et(h.period_end_utc)} <span class="muted">(${esc(h.period_start_utc)} → ${esc(h.period_end_utc)})</span></span>
+      <span class="l">Generated</span><span>${et(h.generated_at_utc)} by ${esc(h.generated_by)} · sequence #${h.sequence} · type ${esc(h.type)}</span>
+      <span class="l">Security</span><span>tNVDA (mint <span class="mono">${esc(h.security_mint)}</span>) · settlement USDC · program <span class="mono">${esc(h.program_id)}</span></span>
+    </div>
+  </div>
+
+  <div class="card">
+    <h2>Period summary</h2>
+    <div class="tiles">
+      <div class="tile"><div class="l">Trades</div><div class="v">${s.trades}</div><div class="s">${s.share_volume} sh · $${fmt(s.notional_usd)}</div></div>
+      <div class="tile"><div class="l">Rejected orders</div><div class="v ${s.rejected_orders ? "warn" : ""}">${s.rejected_orders}</div><div class="s">refused by compliance hook</div></div>
+      <div class="tile"><div class="l">Halts</div><div class="v ${s.halts ? "bad" : ""}">${s.halts}</div><div class="s">${s.compliance_events} compliance events</div></div>
+      <div class="tile"><div class="l">Late public reports</div><div class="v ${s.late_public_reports ? "bad" : "ok"}">${s.late_public_reports}</div><div class="s">10-minute rule</div></div>
+      <div class="tile"><div class="l">Volume cap (${s.volume_cap.month})</div><div class="v ${s.volume_cap.pct_used >= 100 ? "bad" : s.volume_cap.pct_used >= 80 ? "warn" : ""}">${fmt(s.volume_cap.pct_used, 2)}%</div><div class="s">${s.volume_cap.mtd_share_volume} of ${s.volume_cap.cap_shares} sh · ${s.volume_cap.breaches_on_record} breaches</div></div>
+      <div class="tile"><div class="l">Participants</div><div class="v">${s.participants.total}</div><div class="s">${s.participants.eligible} eligible · ${s.participants.restricted} restricted · ${s.participants.pending} pending</div></div>
+      <div class="tile"><div class="l">Pool at period end</div><div class="v">${s.pool_end_of_period.tnvda_liquidity == null ? "—" : Number(s.pool_end_of_period.tnvda_liquidity).toLocaleString()} sh</div><div class="s">${s.pool_end_of_period.usdc_liquidity == null ? "" : fmt(s.pool_end_of_period.usdc_liquidity) + " USDC"} · $${fmt(s.pool_end_of_period.price_usd)}</div></div>
+      <div class="tile"><div class="l">State at period end</div><div class="v">${pill(s.trading_halted_at_period_end, "Trading open", "Halted")}</div><div class="s">primary market ${esc(s.primary_market_at_period_end)}</div></div>
+    </div>
+  </div>
+
+  <div class="card">
+    <h2>Daily activity (ET trading days)</h2>
+    ${days.length ? `<div class="bars">${days.map(d => `<div class="bar"><span>${d.trading_day_et}</span><div class="track"><div class="fill" style="width:${(d.share_volume / maxVol * 100).toFixed(1)}%"></div></div><span class="muted">${d.share_volume} sh · ${d.trades} tr</span></div>`).join("")}</div>
+    <div class="scroll" style="margin-top:12px"><table><thead><tr><th>Day</th><th>Trades</th><th>Buys / Sells</th><th>Volume (sh)</th><th>Notional</th><th>VWAP</th><th>Open</th><th>High</th><th>Low</th><th>Close</th><th>Counterparties</th></tr></thead><tbody>
+    ${days.map(d => `<tr><td>${d.trading_day_et}</td><td>${d.trades}</td><td>${d.buys} / ${d.sells}</td><td>${d.share_volume}</td><td>$${fmt(d.notional_usd)}</td><td>$${fmt(d.vwap_usd)}</td><td>$${fmt(d.open)}</td><td>$${fmt(d.high)}</td><td>$${fmt(d.low)}</td><td>$${fmt(d.close)}</td><td>${d.unique_counterparties}</td></tr>`).join("")}</tbody></table></div>` : `<div class="empty">No trades in this period.</div>`}
+  </div>
+
+  <div class="card">
+    <h2>Trade blotter <span class="muted">${r.trade_blotter.length} executions</span></h2>
+    ${r.trade_blotter.length ? `<div class="scroll"><table><thead><tr><th>#</th><th>Executed (ET)</th><th>Customer side</th><th>Qty</th><th>Price</th><th>Notional</th><th>Counterparty</th><th>Settled</th><th>Reported after</th><th>Trade ID</th></tr></thead><tbody>
+    ${r.trade_blotter.map(t => `<tr><td>${t.seq}</td><td>${esc(t.executed_et)}</td><td class="${t.customer_side === "BUY" ? "ok" : "bad"}">${t.customer_side}</td><td>${t.quantity}</td><td>$${fmt(t.price_usd)}</td><td>$${fmt(t.notional_usd)}</td><td class="mono" title="id ${t.counterparty_id}">${t.counterparty_masked} <span class="muted">${t.counterparty_id.slice(0,8)}</span></td><td class="ok">${t.settlement_status}</td><td class="${t.late_report === "Y" ? "bad" : "ok"}">${t.public_report_latency_sec === "" ? "n/a" : t.public_report_latency_sec + "s"}</td><td class="mono"><a href="${txLink(t.trade_id)}" target="_blank">${short(t.trade_id)}</a></td></tr>`).join("")}</tbody></table></div>` : `<div class="empty">No executions in this period.</div>`}
+  </div>
+
+  <div class="card">
+    <h2>Compliance events <span class="muted">${r.compliance_events.length}</span></h2>
+    ${r.compliance_events.length ? `<div class="scroll"><table><thead><tr><th>Time (ET)</th><th>Event</th><th>Actor</th><th>Details</th><th>On-chain</th></tr></thead><tbody>
+    ${r.compliance_events.map(e => `<tr><td>${esc(e.timestamp_et)}</td><td class="mono ${e.event.includes("HALT") || e.event.includes("BREACH") ? "bad" : e.event.includes("RESUME") ? "ok" : ""}">${esc(e.event)}</td><td>${esc(e.actor)}</td><td style="word-break:break-word">${esc(e.details)}</td><td class="mono">${e.onchain_signature ? `<a href="${txLink(e.onchain_signature)}" target="_blank">${short(e.onchain_signature)}</a>` : "—"}</td></tr>`).join("")}</tbody></table></div>` : `<div class="empty">No compliance events in this period.</div>`}
+  </div>
+
+  <div class="card">
+    <h2>Rejected orders <span class="muted">${r.rejected_orders.length}</span></h2>
+    ${r.rejected_orders.length ? `<div class="scroll"><table><thead><tr><th>Time (UTC)</th><th>Counterparty</th><th>Side</th><th>Qty</th><th>Notional</th><th>Code</th><th>Reason</th></tr></thead><tbody>
+    ${r.rejected_orders.map(x => `<tr><td>${esc(x.timestamp_utc).replace("T"," ").slice(0,19)}</td><td class="mono">${x.wallet_masked} <span class="muted">${x.counterparty_id.slice(0,8)}</span></td><td>${x.side}</td><td>${x.quantity}</td><td>$${fmt(x.notional_usd)}</td><td class="mono warn">${esc(x.rejection_code)}</td><td style="word-break:break-word" class="muted">${esc(x.reason)}</td></tr>`).join("")}</tbody></table></div>` : `<div class="empty">No orders were refused in this period.</div>`}
+  </div>
+
+  <div class="card">
+    <h2>Attestation &amp; integrity</h2>
+    <div id="verify" class="verify">
+      <div class="kv">
+        <span class="l">Statement</span><span>${esc(r.attestation.statement)}</span>
+        <span class="l">Content hash</span><span class="mono">${esc(r.attestation.content_sha256)}</span>
+        <span class="l">Previous report</span><span class="mono">${h.previous_report_hash ? esc(h.previous_report_hash) : "(first report in chain)"}</span>
+        <span class="l">Signer</span><span class="mono">${esc(r.attestation.signer)} <span class="muted">(venue admin key)</span></span>
+        <span class="l">Signature</span><span class="mono">${esc(r.attestation.signature)}</span>
+      </div>
+      <div style="margin-top:12px;display:flex;gap:10px;align-items:center;flex-wrap:wrap"><button id="verifyBtn">Verify hash, signature and chain</button><span id="verifyOut" class="muted"></span></div>
+    </div>
+  </div>`;
+  $("verifyBtn").onclick = () => verify(r, meta);
+}
+
+function b58decode(str) {
+  const A = "123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz"; const bytes = [0];
+  for (const ch of str) { let carry = A.indexOf(ch); if (carry < 0) throw new Error("bad base58"); for (let i = 0; i < bytes.length; i++) { carry += bytes[i] * 58; bytes[i] = carry & 0xff; carry >>= 8; } while (carry) { bytes.push(carry & 0xff); carry >>= 8; } }
+  for (const ch of str) { if (ch !== "1") break; bytes.push(0); }
+  return Uint8Array.from(bytes.reverse());
+}
+async function verify(r, meta) {
+  const out = $("verifyOut"), box = $("verify");
+  const { attestation, ...body } = r;
+  const canonical = JSON.stringify(body);
+  const digest = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(canonical));
+  const hashHex = [...new Uint8Array(digest)].map(b => b.toString(16).padStart(2, "0")).join("");
+  const hashOk = hashHex === attestation.content_sha256;
+  let sigOk = false;
+  try { sigOk = nacl.sign.detached.verify(new Uint8Array(digest), b58decode(attestation.signature), b58decode(attestation.signer)); } catch {}
+  const idx = reports.findIndex(x => x.id === meta.id);
+  const prev = reports[idx + 1]; // list is newest-first
+  const chainOk = prev ? prev.hash === body.report.previous_report_hash : body.report.previous_report_hash == null;
+  const all = hashOk && sigOk && chainOk;
+  box.className = "verify " + (all ? "good" : "badv");
+  out.innerHTML = `${hashOk ? "✔ content hash matches" : "✖ content hash MISMATCH"} · ${sigOk ? "✔ signature valid for venue admin key" : "✖ signature INVALID"} · ${chainOk ? "✔ chained to previous report" : "✖ chain BROKEN"}`;
+  out.className = all ? "ok" : "bad";
+}
+
+document.querySelectorAll("[data-gen]").forEach(b => b.onclick = async () => {
+  b.disabled = true;
+  try { const m = await fetch("/api/admin/report", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ type: b.dataset.gen }) }).then(r => r.json()); await loadList(); location.hash = m.id; }
+  catch (e) { alert(e.message); } finally { b.disabled = false; }
+});
+window.addEventListener("hashchange", () => { if (location.hash.length > 1) show(location.hash.slice(1)); });
+(async () => { await loadList(); if (location.hash.length > 1) show(location.hash.slice(1)); })();
+</script>
+</body></html>
