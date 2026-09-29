@@ -12,7 +12,7 @@ import express from "express";
 import * as path from "path";
 import * as fs from "fs";
 import * as crypto from "crypto";
-import { PublicKey, Transaction } from "@solana/web3.js";
+import { PublicKey, SystemProgram, Transaction } from "@solana/web3.js";
 import {
   ASSOCIATED_TOKEN_PROGRAM_ID, TOKEN_2022_PROGRAM_ID,
   createAssociatedTokenAccountIdempotentInstruction,
@@ -111,6 +111,48 @@ app.get("/api/kyc/:wallet", async (req, res) => {
       compliant: p.isUsPerson && !p.isOfacSanctioned && p.kycCleared,
     });
   } catch (e: any) { res.status(400).json({ error: e.message }); }
+});
+
+// ---- Admin console (localhost only) -----------------------------------------
+// These endpoints sign with the treasury/admin key, so only accept requests from this machine.
+const localOnly: express.RequestHandler = (req, res, next) => {
+  const ip = (req.ip ?? "").replace(/^::ffff:/, "");
+  if (ip === "127.0.0.1" || ip === "::1") return next();
+  res.status(403).json({ error: "admin endpoints are only available from localhost" });
+};
+const CONFIG_PDA = configPda(program.programId);
+
+app.get("/api/admin/state", localOnly, async (_req, res) => {
+  try {
+    const c = await (program.account as any).config.fetchNullable(CONFIG_PDA);
+    const all = await (program.account as any).complianceProfile.all();
+    const profiles = all.map((p: any) => ({
+      wallet: p.account.walletAddress.toBase58(),
+      isUsPerson: p.account.isUsPerson, isOfacSanctioned: p.account.isOfacSanctioned, kycCleared: p.account.kycCleared,
+      compliant: p.account.isUsPerson && !p.account.isOfacSanctioned && p.account.kycCleared,
+      isTreasury: p.account.walletAddress.equals(TREASURY),
+    })).sort((a: any, b: any) => (a.isTreasury ? -1 : b.isTreasury ? 1 : a.wallet.localeCompare(b.wallet)));
+    res.json({ admin: c?.admin?.toBase58() ?? null, halted: c?.halted ?? null, treasury: TREASURY.toBase58(), profiles });
+  } catch (e: any) { res.status(500).json({ error: String(e?.message ?? e) }); }
+});
+
+app.post("/api/admin/kyc", localOnly, async (req, res) => {
+  try {
+    const wallet = new PublicKey(req.body.wallet);
+    const { isUsPerson, isOfacSanctioned, kycCleared } = req.body;
+    const sig = await program.methods
+      .updateKycStatus(!!isUsPerson, !!isOfacSanctioned, !!kycCleared)
+      .accountsPartial({ admin: TREASURY, config: CONFIG_PDA, userWallet: wallet, complianceProfile: profilePda(program.programId, wallet), systemProgram: SystemProgram.programId })
+      .rpc();
+    res.json({ signature: sig });
+  } catch (e: any) { res.status(400).json({ error: String(e?.message ?? e) }); }
+});
+
+app.post("/api/admin/halt", localOnly, async (req, res) => {
+  try {
+    const sig = await program.methods.setTradingHalt(!!req.body.halted).accountsPartial({ admin: TREASURY, config: CONFIG_PDA }).rpc();
+    res.json({ signature: sig });
+  } catch (e: any) { res.status(400).json({ error: String(e?.message ?? e) }); }
 });
 
 // ---- Solana Pay transaction request ----------------------------------------

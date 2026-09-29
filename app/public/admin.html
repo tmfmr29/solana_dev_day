@@ -1,0 +1,180 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>TSV Admin Console</title>
+<link rel="icon" href="/icon.svg">
+<style>
+  :root { --bg:#0b1220; --card:#121a2b; --line:#233049; --text:#e6edf7; --muted:#8a9bb8; --ok:#4ade80; --bad:#f87171; --warn:#fbbf24; --accent:#60a5fa; }
+  * { box-sizing:border-box; }
+  body { margin:0; background:var(--bg); color:var(--text); font:15px/1.5 -apple-system,BlinkMacSystemFont,"Segoe UI",Inter,sans-serif; }
+  header { display:flex; align-items:center; justify-content:space-between; padding:16px 24px; border-bottom:1px solid var(--line); flex-wrap:wrap; gap:10px; }
+  header h1 { font-size:18px; margin:0; } header h1 span { color:var(--muted); font-weight:400; }
+  header a { color:var(--accent); text-decoration:none; }
+  main { max-width:1100px; margin:0 auto; padding:24px 16px; display:grid; gap:20px; }
+  .card { background:var(--card); border:1px solid var(--line); border-radius:14px; padding:20px; min-width:0; }
+  .card h2 { margin:0 0 12px; font-size:15px; text-transform:uppercase; letter-spacing:.8px; color:var(--muted); }
+  button { background:var(--accent); color:#04111f; border:0; border-radius:10px; padding:10px 14px; font-weight:600; font-size:14px; cursor:pointer; }
+  button.secondary { background:transparent; color:var(--text); border:1px solid var(--line); }
+  button.danger { background:var(--bad); color:#1a0505; }
+  button.ok { background:var(--ok); color:#052e16; }
+  button:disabled { opacity:.5; cursor:not-allowed; }
+  input { background:#0b1220; color:var(--text); border:1px solid var(--line); border-radius:10px; padding:10px 12px; font-size:14px; width:100%; }
+  .row { display:flex; gap:10px; align-items:center; flex-wrap:wrap; }
+  .badge { display:inline-block; padding:4px 10px; border-radius:999px; font-size:12px; font-weight:600; border:1px solid var(--line); white-space:nowrap; }
+  .g { color:var(--ok); border-color:var(--ok); } .r { color:var(--bad); border-color:var(--bad); } .y { color:var(--warn); border-color:var(--warn); }
+  .mono { font-family:ui-monospace,SFMono-Regular,Menlo,monospace; font-size:13px; }
+  .muted { color:var(--muted); }
+  table { width:100%; border-collapse:collapse; font-size:14px; }
+  th, td { text-align:left; padding:12px 8px; border-bottom:1px solid var(--line); vertical-align:middle; }
+  th { color:var(--muted); font-weight:500; font-size:12px; text-transform:uppercase; letter-spacing:.6px; }
+  .flag { display:inline-flex; align-items:center; gap:6px; cursor:pointer; user-select:none; padding:6px 10px; border-radius:8px; border:1px solid var(--line); background:#0b1220; }
+  .flag.on { border-color:var(--ok); } .flag.off { border-color:var(--line); color:var(--muted); }
+  .flag.bad.on { border-color:var(--bad); color:var(--bad); }
+  .halt { display:flex; align-items:center; justify-content:space-between; gap:16px; flex-wrap:wrap; }
+  .big { font-size:22px; font-weight:700; }
+  #log { background:#070c16; border:1px solid var(--line); border-radius:10px; padding:12px; min-height:60px; max-height:200px; overflow:auto; white-space:pre-wrap; word-break:break-all; }
+  .busy { opacity:.6; pointer-events:none; }
+</style>
+</head>
+<body>
+<header>
+  <h1>TSV Admin Console <span>· compliance officer view · devnet</span></h1>
+  <div class="row"><span id="adminBadge" class="badge">—</span><a href="/">← Investor dashboard</a></div>
+</header>
+<main>
+  <section class="card">
+    <h2>Trading halt</h2>
+    <div class="halt">
+      <div><div class="big" id="haltState">—</div><div class="muted">Halts every transfer of tNVDA at the protocol level, in every wallet and app.</div></div>
+      <div class="row"><button id="haltOn" class="danger">Halt trading</button><button id="haltOff" class="ok">Resume trading</button></div>
+    </div>
+  </section>
+
+  <section class="card">
+    <h2>Investor wallets</h2>
+    <div class="row" style="margin-bottom:14px">
+      <input id="newWallet" placeholder="Paste a wallet address to add / whitelist it" style="flex:1; min-width:280px">
+      <button id="addBtn">Whitelist wallet</button>
+    </div>
+    <p class="muted" style="margin:0 0 10px">Click a flag to toggle it. Each click is an on-chain transaction signed by the venue admin key. A wallet may receive tNVDA only when it is a <b>US person</b>, <b>not sanctioned</b>, and <b>KYC cleared</b>.</p>
+    <div style="overflow:auto">
+    <table>
+      <thead><tr><th>Wallet</th><th>Status</th><th>US person</th><th>OFAC sanctioned</th><th>KYC cleared</th><th>Quick actions</th></tr></thead>
+      <tbody id="rows"><tr><td colspan="6" class="muted">Loading…</td></tr></tbody>
+    </table>
+    </div>
+  </section>
+
+  <section class="card">
+    <h2>Activity</h2>
+    <div id="log" class="mono">Ready.</div>
+  </section>
+</main>
+
+<script>
+const $ = (id) => document.getElementById(id);
+const log = (m) => { $("log").textContent += "\n" + m; $("log").scrollTop = 1e9; };
+const short = (s) => s.slice(0,4) + "…" + s.slice(-4);
+const txLink = (sig) => `https://explorer.solana.com/tx/${sig}?cluster=devnet`;
+let state = null;
+
+async function api(path, body) {
+  const r = await fetch(path, body ? { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(body) } : undefined);
+  const j = await r.json();
+  if (!r.ok || j.error) throw new Error(j.error ?? r.statusText);
+  return j;
+}
+
+function statusOf(p) {
+  if (p.isOfacSanctioned) return ["BLOCKED · OFAC sanctioned", "r"];
+  if (!p.isUsPerson) return ["BLOCKED · not a US person", "r"];
+  if (!p.kycCleared) return ["BLOCKED · KYC not cleared", "y"];
+  return ["WHITELISTED", "g"];
+}
+
+function flag(p, key, label, bad) {
+  const on = p[key];
+  return `<span class="flag ${on ? "on" : "off"} ${bad ? "bad" : ""}" data-w="${p.wallet}" data-k="${key}" title="Click to toggle">${on ? "●" : "○"} ${label}</span>`;
+}
+
+function render() {
+  $("adminBadge").textContent = state.admin ? `admin ${short(state.admin)}` : "config not initialized";
+  $("adminBadge").className = "badge " + (state.admin ? "g" : "r");
+  $("haltState").textContent = state.halted ? "⛔ TRADING HALTED" : "🟢 Trading open";
+  $("haltState").style.color = state.halted ? "var(--bad)" : "var(--ok)";
+  $("haltOn").disabled = !!state.halted; $("haltOff").disabled = !state.halted;
+  const body = $("rows");
+  if (!state.profiles.length) { body.innerHTML = `<tr><td colspan="6" class="muted">No wallets yet.</td></tr>`; return; }
+  body.innerHTML = state.profiles.map(p => {
+    const [txt, cls] = statusOf(p);
+    return `<tr>
+      <td class="mono" title="${p.wallet}">${short(p.wallet)}${p.isTreasury ? ' <span class="badge">treasury</span>' : ""}<br><a class="muted" style="text-decoration:none;font-size:11px" target="_blank" href="https://explorer.solana.com/address/${p.wallet}?cluster=devnet">explorer ↗</a></td>
+      <td><span class="badge ${cls}">${txt}</span></td>
+      <td>${flag(p, "isUsPerson", "US person")}</td>
+      <td>${flag(p, "isOfacSanctioned", "Sanctioned", true)}</td>
+      <td>${flag(p, "kycCleared", "Cleared")}</td>
+      <td class="row">
+        <button class="ok" data-act="clear" data-w="${p.wallet}">Whitelist</button>
+        <button class="danger" data-act="sanction" data-w="${p.wallet}">Sanction</button>
+        <button class="secondary" data-act="revoke" data-w="${p.wallet}">Revoke KYC</button>
+      </td>
+    </tr>`;
+  }).join("");
+}
+
+async function refresh() {
+  state = await api("/api/admin/state");
+  render();
+}
+
+async function setKyc(wallet, next, why) {
+  document.body.classList.add("busy");
+  try {
+    log(`▶ ${why} for ${short(wallet)} → US=${next.isUsPerson} sanctioned=${next.isOfacSanctioned} cleared=${next.kycCleared}`);
+    const r = await api("/api/admin/kyc", { wallet, ...next });
+    log(`✔ on-chain: ${txLink(r.signature)}`);
+    await refresh();
+  } catch (e) { log(`✖ ${e.message}`); }
+  finally { document.body.classList.remove("busy"); }
+}
+
+document.addEventListener("click", async (ev) => {
+  const el = ev.target.closest("[data-k], [data-act]");
+  if (!el) return;
+  const wallet = el.dataset.w;
+  const p = state.profiles.find(x => x.wallet === wallet);
+  if (!p) return;
+  const cur = { isUsPerson: p.isUsPerson, isOfacSanctioned: p.isOfacSanctioned, kycCleared: p.kycCleared };
+  if (el.dataset.k) { cur[el.dataset.k] = !cur[el.dataset.k]; return setKyc(wallet, cur, `Toggle ${el.dataset.k}`); }
+  if (el.dataset.act === "clear")    return setKyc(wallet, { isUsPerson: true,  isOfacSanctioned: false, kycCleared: true },  "Whitelist");
+  if (el.dataset.act === "sanction") return setKyc(wallet, { ...cur, isOfacSanctioned: true }, "Sanction");
+  if (el.dataset.act === "revoke")   return setKyc(wallet, { ...cur, kycCleared: false }, "Revoke KYC");
+});
+
+$("addBtn").onclick = () => {
+  const w = $("newWallet").value.trim();
+  if (w.length < 32) { log("✖ That doesn't look like a wallet address."); return; }
+  $("newWallet").value = "";
+  setKyc(w, { isUsPerson: true, isOfacSanctioned: false, kycCleared: true }, "Whitelist new wallet");
+};
+
+async function setHalt(halted) {
+  document.body.classList.add("busy");
+  try {
+    log(`▶ ${halted ? "HALT" : "RESUME"} trading`);
+    const r = await api("/api/admin/halt", { halted });
+    log(`✔ on-chain: ${txLink(r.signature)}`);
+    await refresh();
+  } catch (e) { log(`✖ ${e.message}`); }
+  finally { document.body.classList.remove("busy"); }
+}
+$("haltOn").onclick = () => setHalt(true);
+$("haltOff").onclick = () => setHalt(false);
+
+refresh().catch(e => log(`✖ ${e.message}`));
+setInterval(() => refresh().catch(() => {}), 20000);
+</script>
+</body>
+</html>
