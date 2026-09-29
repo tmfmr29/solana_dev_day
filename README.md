@@ -2,7 +2,11 @@
 
 **Wedge: Infrastructure / compliance.** A tokenized-security venue where the rules are enforced by the asset itself, not by the app.
 
-> 📹 **Demo video:** _[link — 3 minutes]_ · 🌐 **Program on devnet:** [`7Kmj…bxkTn`](https://explorer.solana.com/address/7KmjcBRHVjjhqxjihdJAFvfukbjhnNP82QPpVevbxkTn?cluster=devnet)
+> 📹 **Demo video:** https://youtu.be/3-jwfh-8GkM · 🌐 **Program on devnet:** [`7Kmj…bxkTn`](https://explorer.solana.com/address/7KmjcBRHVjjhqxjihdJAFvfukbjhnNP82QPpVevbxkTn?cluster=devnet)
+
+## Why I built this
+
+I'm a U.S. attorney with decades of experience in securities law, including trading, settlement and custody. The motivation for this project is the SEC's September 17 exemption for tokenized securities venues, which unlocks valuable new functionality provided every requirement is met. This is version 1, built to stand up most of those functions during Solana Dev Day; I'll keep refining it over the coming weeks until it's a real-world, fully functional compliant AMM.
 
 ## The user and the problem
 
