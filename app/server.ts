@@ -228,6 +228,27 @@ app.get("/api/audit.csv", localOnly, (_req, res) => {
   res.type("text/csv").send(toCsv(audit.map((a) => ({ timestamp_utc: new Date(a.ts * 1000).toISOString(), actor: a.actor, action: a.action, details: a.details, signature: a.signature ?? "" }))));
 });
 
+// ---- Oracle / reference pricing log & end-of-day pool snapshots ----------------
+type PriceObs = { ts: number; source: string; feed: string; price: number; context: string; orderId?: string };
+const PRICES_PATH = path.join(__dirname, "..", "devnet", "prices.json");
+const priceLog: PriceObs[] = (() => { try { return JSON.parse(fs.readFileSync(PRICES_PATH, "utf8")); } catch { return []; } })();
+function recordPrice(context: string, orderId?: string) {
+  priceLog.push({ ts: Math.floor(Date.now() / 1000), source: "venue-config", feed: "fixed reference price (no external oracle in prototype)", price: cfg.priceUsdcPerTnvda, context, orderId });
+  if (priceLog.length > 20000) priceLog.splice(0, priceLog.length - 20000);
+  fs.writeFileSync(PRICES_PATH, JSON.stringify(priceLog, null, 2));
+}
+type PoolSnap = { day: string; ts: number; tnvda: number | null; usdc: number | null; price: number; tvlUsd: number | null; dailyTrades: number; dailyTnvdaVolume: number; dailyUsdcVolume: number };
+const SNAPS_PATH = path.join(__dirname, "..", "devnet", "pool_snapshots.json");
+const poolSnaps: PoolSnap[] = (() => { try { return JSON.parse(fs.readFileSync(SNAPS_PATH, "utf8")); } catch { return []; } })();
+async function takePoolSnapshot(day: string) {
+  const p = await poolMetrics();
+  const tvl = p.tnvdaLiquidity == null || p.usdcLiquidity == null ? null : p.tnvdaLiquidity * p.priceUsdcPerTnvda + p.usdcLiquidity;
+  const snap: PoolSnap = { day, ts: Math.floor(Date.now() / 1000), tnvda: p.tnvdaLiquidity, usdc: p.usdcLiquidity, price: p.priceUsdcPerTnvda, tvlUsd: tvl, dailyTrades: p.dailyTrades, dailyTnvdaVolume: p.dailyTnvdaVolume, dailyUsdcVolume: p.dailyUsdcVolume };
+  const i = poolSnaps.findIndex((x) => x.day === day); if (i >= 0) poolSnaps[i] = snap; else poolSnaps.push(snap);
+  fs.writeFileSync(SNAPS_PATH, JSON.stringify(poolSnaps, null, 2));
+  return snap;
+}
+
 // ---- Order book of record (origination → route → execution / reject / expire) --
 // Every swap request is an order. Its ID is written into the transaction as a memo so the
 // on-chain execution can be linked back to the origination event (CAT-style lifecycle).
@@ -311,6 +332,7 @@ app.post("/api/swap", async (req, res) => {
       : { ok: true, reason: null };
     const order: Order = { orderId, ts: Math.floor(Date.now() / 1000), wallet: investor.toBase58(), fdid: fdidOf(investor.toBase58()), side, qty: Number(tnvdaBase) / 10 ** TNVDA_DECIMALS, usdc: Number(usdcBase) / 10 ** USDC_DECIMALS, price: cfg.priceUsdcPerTnvda, status: preview.ok ? "NEW" : "REJECTED", reason: preview.ok ? undefined : (preview.reason ?? "unknown") };
     orders.set(orderId, order); saveOrders();
+    recordPrice(`quote for ${side} order`, orderId);
     if (!preview.ok) recordRejected({ wallet: investor.toBase58(), side, tnvda: order.qty, usdc: order.usdc, reason: preview.reason ?? "unknown" });
 
     const usdcUi = Number(usdcBase) / 10 ** USDC_DECIMALS, tnvdaUi = Number(tnvdaBase) / 10 ** TNVDA_DECIMALS;
@@ -584,6 +606,39 @@ async function generateReport(type: string, from: number, to: number, generatedB
   const quarterOf = (m: string) => `${m.slice(0, 4)}-Q${Math.floor((+m.slice(5, 7) - 1) / 3) + 1}`;
   const quarterly = [...new Set(months.map(quarterOf))].map((q) => { const ms = volumeCapReport.filter((m) => quarterOf(m.month) === q); return { quarter: q, months: ms.map((m) => m.month), total_volume_shares: +ms.reduce((a, m) => a + m.mtd_volume_shares, 0).toFixed(6), total_trades: ms.reduce((a, m) => a + m.trades, 0), months_in_breach: ms.filter((m) => !m.compliant).length, breaches: ms.reduce((a, m) => a + m.breaches_this_month, 0), pauses: ms.reduce((a, m) => a + m.pauses_triggered, 0), all_months_compliant: ms.every((m) => m.compliant) }; });
 
+  // B. Trade reporting facility file (TRF: tokenized NMS stock). Venue reports as principal.
+  const VENUE_MPID = "DVST";
+  const trfRows = trades.map((t, i) => {
+    const custSide = (t.side ?? "buy") === "buy" ? "B" : "S", venueSide = custSide === "B" ? "S" : "B";
+    return { control_number: `${VENUE_MPID}-${new Date(t.blockTime * 1000).toISOString().slice(0, 10).replace(/-/g, "")}-${String(i + 1).padStart(6, "0")}`,
+      symbol: "tNVDA", underlying_symbol: "NVDA", execution_time_utc: fmtTs(t.blockTime), execution_time_et: fmtEt(t.blockTime), report_time_utc: fmtTs(t.reportedAt),
+      quantity: t.tnvdaOut, price_usd: +(t.usdcIn / t.tnvdaOut).toFixed(6), notional_usd: t.usdcIn, settlement_currency: "USDC",
+      reporting_party_mpid: VENUE_MPID, reporting_party_side: venueSide, reporting_party_capacity: "P",
+      contra_party_id: fdidOf(t.buyer), contra_party_side: custSide, contra_party_capacity: "A", contra_wallet_masked: t.buyerMasked,
+      trade_modifier: "", as_of: "N", late_indicator: !t.backfilled && t.latencySec > 600 ? "Y" : "N", venue_id: VENUE_IMID, settlement: "T+0", trade_id: t.signature, block_height: t.slot ?? "" };
+  });
+
+  // C1. Public tape verification: was every trade published, machine-readably, within 10 minutes?
+  const tapeVerif = trades.map((t) => ({ trade_id: t.signature, executed_utc: fmtTs(t.blockTime), published_utc: t.backfilled ? "" : fmtTs(t.reportedAt), latency_sec: t.backfilled ? "" : t.latencySec,
+    within_10_min: t.backfilled ? "UNKNOWN (back-filled after restart)" : t.latencySec <= 600 ? "YES" : "NO", side_published: (t.side ?? "buy").toUpperCase(), price_published: +(t.usdcIn / t.tnvdaOut).toFixed(6), size_published: t.tnvdaOut,
+    formats: "JSON (/api/tape), CSV (/api/tape.csv), HTML (/tape.html)", masked_counterparty: t.buyerMasked }));
+  const tapeSummary = { trades: trades.length, published_within_10_min: tapeVerif.filter((v) => v.within_10_min === "YES").length, late: tapeVerif.filter((v) => v.within_10_min === "NO").length, unknown: tapeVerif.filter((v) => v.within_10_min.startsWith("UNKNOWN")).length,
+    max_latency_sec: Math.max(0, ...trades.filter((t) => !t.backfilled).map((t) => t.latencySec)), avg_latency_sec: (() => { const l = trades.filter((t) => !t.backfilled); return l.length ? +(l.reduce((a, t) => a + t.latencySec, 0) / l.length).toFixed(1) : 0; })(),
+    attestation: trades.length === 0 || tapeVerif.every((v) => v.within_10_min !== "NO") ? "All executions in the period were published to the public tape within 10 minutes (or could not be measured due to a restart)." : "One or more executions were published late; see rows marked NO." };
+
+  // C2. End-of-day pool reserves & TVL, one row per day in the period (today's row is a live snapshot).
+  const dayKeys = new Set<string>(); for (let d = from; d < to; d += 86400) dayKeys.add(new Date(d * 1000).toISOString().slice(0, 10)); dayKeys.add(new Date((to - 1) * 1000).toISOString().slice(0, 10));
+  const todayKey = new Date().toISOString().slice(0, 10);
+  if (dayKeys.has(todayKey)) await takePoolSnapshot(todayKey).catch(() => null);
+  const eodPool = [...dayKeys].sort().map((day) => { const sn = poolSnaps.find((x) => x.day === day); const dt = trades.filter((t) => new Date(t.blockTime * 1000).toISOString().slice(0, 10) === day);
+    return { day_utc: day, snapshot_utc: sn ? fmtTs(sn.ts) : "", pool_address: cfg.treasury, tnvda_reserve: sn?.tnvda ?? "", usdc_reserve: sn?.usdc ?? "", reference_price_usd: sn?.price ?? cfg.priceUsdcPerTnvda,
+      tvl_usd: sn?.tvlUsd == null ? "" : +sn.tvlUsd.toFixed(2), pair_share_volume: +dt.reduce((a, t) => a + t.tnvdaOut, 0).toFixed(6), pair_usdc_volume: +dt.reduce((a, t) => a + t.usdcIn, 0).toFixed(2), trades: dt.length, note: sn ? (day === todayKey ? "live snapshot at generation" : "end-of-day snapshot") : "no snapshot recorded (server not running at EOD)" }; });
+
+  // C3. Oracle / reference pricing log for the period.
+  const pricingRows = priceLog.filter((o) => o.ts >= from && o.ts < to).map((o) => ({ timestamp_utc: fmtTs(o.ts), source: o.source, feed: o.feed, price_usd: o.price, context: o.context, order_id: o.orderId ?? "" }));
+  const pricingSummary = { observations: pricingRows.length, sources: [...new Set(pricingRows.map((r) => r.source))], min: pricingRows.length ? Math.min(...pricingRows.map((r) => r.price_usd)) : null, max: pricingRows.length ? Math.max(...pricingRows.map((r) => r.price_usd)) : null,
+    methodology: "Prototype uses a venue-configured fixed reference price for tNVDA/USDC. Production: AMM curve anchored to an external NVDA reference feed (e.g. RedStone, Kaiko, Chronicle) with staleness and deviation guards; every quote records the feed value and timestamp used." };
+
   const seq = (reportsIndex[reportsIndex.length - 1]?.seq ?? 0) + 1;
   const prevHash = reportsIndex[reportsIndex.length - 1]?.hash ?? null;
   const id = `${type}-${new Date(from * 1000).toISOString().slice(0, 10)}-${String(seq).padStart(4, "0")}`;
@@ -598,6 +653,10 @@ async function generateReport(type: string, from: number, to: number, generatedB
       pool_end_of_period: { tnvda_liquidity: pool.tnvdaLiquidity, usdc_liquidity: pool.usdcLiquidity, price_usd: pool.priceUsdcPerTnvda }, participants: roster },
     trade_blotter: blotter, daily_summary: daily, compliance_events: evRows, rejected_orders: rejRows,
     cat_daily_file: { summary: catSummary, events: catRows },
+    trf_daily_file: { reporting_party_mpid: VENUE_MPID, capacity: "Principal (venue treasury is the contra on every trade)", note: "Modeled on FINRA TRF trade-report fields for a tokenized NMS stock; a live submission must be validated against the current TRF/ORF technical specifications.", trades: trfRows },
+    public_tape_verification: { rule: "Every execution published in machine-readable form within 10 minutes: price, size, direction, masked counterparty, signature.", summary: tapeSummary, trades: tapeVerif },
+    eod_pool_state: { pool_address: cfg.treasury, days: eodPool },
+    pricing_log: { summary: pricingSummary, observations: pricingRows },
     volume_cap_report: { rule: `Monthly venue volume in a Tier 1 tokenized NMS stock ≤ ${venue.capPct}% of the security's consolidated ADV; second breach in a rolling 12 months → 3-month trading pause`, months: volumeCapReport, quarters: quarterly },
   };
   const canonical = JSON.stringify(body);
@@ -615,11 +674,15 @@ async function generateReport(type: string, from: number, to: number, generatedB
   fs.writeFileSync(path.join(dir, "compliance_events.csv"), toCsv(evRows));
   fs.writeFileSync(path.join(dir, "rejected_orders.csv"), toCsv(rejRows));
   fs.writeFileSync(path.join(dir, "cat_daily_file.csv"), toCsv(catRows));
+  fs.writeFileSync(path.join(dir, "trf_daily_file.csv"), toCsv(trfRows));
+  fs.writeFileSync(path.join(dir, "public_tape_verification.csv"), toCsv(tapeVerif));
+  fs.writeFileSync(path.join(dir, "eod_pool_state.csv"), toCsv(eodPool));
+  fs.writeFileSync(path.join(dir, "pricing_log.csv"), toCsv(pricingRows));
   fs.writeFileSync(path.join(dir, "volume_cap_monthly.csv"), toCsv(volumeCapReport.map(({ daily_series, log, ...m }) => m)));
   fs.writeFileSync(path.join(dir, "volume_cap_log.csv"), toCsv(volumeCapReport.flatMap((m) => m.log.map((l) => ({ month: m.month, ...l })))));
   fs.writeFileSync(path.join(dir, "cat_daily_file.json"), JSON.stringify({ reporter: VENUE_IMID, report_id: id, period_start_utc: fmtTs(from), period_end_utc: fmtTs(to), ...catSummary, events: catRows }, null, 2));
   fs.writeFileSync(path.join(dir, "report.html"), renderReportHtml(envelope));
-  const meta: ReportMeta = { id, seq, type, from, to, generatedAt: now, generatedBy, trades: trades.length, hash, prevHash, signature, files: ["report.html", "report.json", "trade_blotter.csv", "daily_summary.csv", "compliance_events.csv", "rejected_orders.csv", "cat_daily_file.csv", "cat_daily_file.json", "volume_cap_monthly.csv", "volume_cap_log.csv"] };
+  const meta: ReportMeta = { id, seq, type, from, to, generatedAt: now, generatedBy, trades: trades.length, hash, prevHash, signature, files: ["report.html", "report.json", "trade_blotter.csv", "daily_summary.csv", "compliance_events.csv", "rejected_orders.csv", "cat_daily_file.csv", "cat_daily_file.json", "volume_cap_monthly.csv", "volume_cap_log.csv", "trf_daily_file.csv", "public_tape_verification.csv", "eod_pool_state.csv", "pricing_log.csv"] };
   reportsIndex.push(meta); fs.writeFileSync(REPORTS_INDEX, JSON.stringify(reportsIndex, null, 2));
   logAudit({ actor: generatedBy, action: "REGULATORY_REPORT", details: `${id}: ${trades.length} trades, ${rej.length} rejections, ${events.length} events; sha256 ${hash.slice(0, 16)}…` });
   return meta;
@@ -646,13 +709,21 @@ table{border-collapse:collapse;width:100%;font-size:12px}th,td{border:1px solid 
 <h2>5 · Compliance events (${r.compliance_events.length})</h2>${table(r.compliance_events)}
 <h2>6 · Rejected orders (${r.rejected_orders.length})</h2>${table(r.rejected_orders)}
 <h2>7 · CAT daily file (${r.cat_daily_file.events.length} events · ${esc(r.cat_daily_file.summary.MENO)} MENO / ${esc(r.cat_daily_file.summary.MEOR)} MEOR / ${esc(r.cat_daily_file.summary.MEOT)} MEOT / ${esc(r.cat_daily_file.summary.MEOC)} MEOC · due ${esc(r.cat_daily_file.summary.deadline)})</h2><p class="muted">${esc(r.cat_daily_file.summary.note)}</p>${table(r.cat_daily_file.events, ["type","eventTimestamp","orderID","firmDesignatedID","side","quantity","price","executionPrice","executedQuantity","liquidityIndicator","blockHeight","tradeID","rejectCode"])}
-<h2>8 · Tiered volume cap &amp; ADV tracking</h2><p class="muted">${esc(r.volume_cap_report.rule)}</p>${table(r.volume_cap_report.months.map((m: any) => ({ month: m.month, adv_benchmark_shares: m.adv_benchmark_shares, cap_pct_of_adv: m.cap_pct_of_adv, cap_shares: m.cap_shares, mtd_volume_shares: m.mtd_volume_shares, pct_of_cap_used: m.pct_of_cap_used, trades: m.trades, compliant: m.compliant ? "YES" : "NO", warning_reached_utc: m.warning_reached_utc ?? "", breach_utc: m.breach_utc ?? "", breaches_this_month: m.breaches_this_month, breaches_rolling_12m: m.breaches_rolling_12m, pauses_triggered: m.pauses_triggered })))}
+<h2>8 · Trade reporting facility file (TRF · ${r.trf_daily_file.trades.length} trades · MPID ${esc(r.trf_daily_file.reporting_party_mpid)} as ${esc(r.trf_daily_file.capacity)})</h2><p class="muted">${esc(r.trf_daily_file.note)}</p>${table(r.trf_daily_file.trades, ["control_number","execution_time_et","symbol","quantity","price_usd","notional_usd","reporting_party_mpid","reporting_party_side","reporting_party_capacity","contra_party_id","contra_party_side","contra_party_capacity","late_indicator","trade_id"])}
+<h2>9 · Public tape verification (10-minute rule)</h2>${kv(r.public_tape_verification.summary)}${table(r.public_tape_verification.trades, ["executed_utc","published_utc","latency_sec","within_10_min","side_published","price_published","size_published","trade_id"])}
+<h2>10 · End-of-day pool reserves &amp; TVL</h2>${table(r.eod_pool_state.days)}
+<h2>11 · Reference pricing log</h2>${kv(r.pricing_log.summary)}${table(r.pricing_log.observations)}
+<h2>12 · Tiered volume cap &amp; ADV tracking</h2><p class="muted">${esc(r.volume_cap_report.rule)}</p>${table(r.volume_cap_report.months.map((m: any) => ({ month: m.month, adv_benchmark_shares: m.adv_benchmark_shares, cap_pct_of_adv: m.cap_pct_of_adv, cap_shares: m.cap_shares, mtd_volume_shares: m.mtd_volume_shares, pct_of_cap_used: m.pct_of_cap_used, trades: m.trades, compliant: m.compliant ? "YES" : "NO", warning_reached_utc: m.warning_reached_utc ?? "", breach_utc: m.breach_utc ?? "", breaches_this_month: m.breaches_this_month, breaches_rolling_12m: m.breaches_rolling_12m, pauses_triggered: m.pauses_triggered })))}
 ${r.volume_cap_report.quarters.length ? `<h3 style="font-size:13px;margin:12px 0 6px">Quarterly roll-up</h3>${table(r.volume_cap_report.quarters.map((q: any) => ({ ...q, months: q.months.join(", "), all_months_compliant: q.all_months_compliant ? "YES" : "NO" })))}` : ""}
 <h3 style="font-size:13px;margin:12px 0 6px">Breach &amp; circuit-breaker log</h3>${table(r.volume_cap_report.months.flatMap((m: any) => m.log.map((l: any) => ({ month: m.month, ...l }))))}
-<h2>9 · Attestation</h2><div class="box">${esc(r.attestation.statement)}<br><br><span class="mono">content_sha256: ${esc(r.attestation.content_sha256)}<br>signer (venue admin key): ${esc(r.attestation.signer)}<br>signature (${esc(r.attestation.algorithm)}): ${esc(r.attestation.signature)}</span><br><br><span class="muted">Verify: recompute SHA-256 over the canonical JSON body (all fields except <i>attestation</i>) and check the ed25519 signature against the signer's public key. Each trade_id is a Solana transaction signature that can be independently confirmed on-chain.</span></div>
+<h2>13 · Attestation</h2><div class="box">${esc(r.attestation.statement)}<br><br><span class="mono">content_sha256: ${esc(r.attestation.content_sha256)}<br>signer (venue admin key): ${esc(r.attestation.signer)}<br>signature (${esc(r.attestation.algorithm)}): ${esc(r.attestation.signature)}</span><br><br><span class="muted">Verify: recompute SHA-256 over the canonical JSON body (all fields except <i>attestation</i>) and check the ed25519 signature against the signer's public key. Each trade_id is a Solana transaction signature that can be independently confirmed on-chain.</span></div>
 <p class="muted" style="margin-top:28px">This venue is a devnet prototype and is not registered with or endorsed by the U.S. Securities and Exchange Commission.</p>
 </body></html>`;
 }
+
+// End-of-day pool snapshot just before the daily report, plus an hourly refresh so a day is never missing one.
+setInterval(() => takePoolSnapshot(new Date().toISOString().slice(0, 10)).catch(() => {}), 3600000);
+takePoolSnapshot(new Date().toISOString().slice(0, 10)).catch(() => {});
 
 // Daily end-of-day report at 20:00 ET, covering that ET trading day.
 let lastDailyFor: string | null = reportsIndex.filter((r) => r.type === "daily").map((r) => etParts(new Date(r.from * 1000)).date).pop() ?? null;

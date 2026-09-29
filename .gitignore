@@ -15,3 +15,5 @@ test-ledger
 devnet/reports/
 devnet/rejected.json
 devnet/orders.json
+devnet/prices.json
+devnet/pool_snapshots.json

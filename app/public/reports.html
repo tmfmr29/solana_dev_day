@@ -133,6 +133,41 @@ async function show(id) {
     ${r.rejected_orders.map(x => `<tr><td>${esc(x.timestamp_utc).replace("T"," ").slice(0,19)}</td><td class="mono">${x.wallet_masked} <span class="muted">${x.counterparty_id.slice(0,8)}</span></td><td>${x.side}</td><td>${x.quantity}</td><td>$${fmt(x.notional_usd)}</td><td class="mono warn">${esc(x.rejection_code)}</td><td style="word-break:break-word" class="muted">${esc(x.reason)}</td></tr>`).join("")}</tbody></table></div>` : `<div class="empty">No orders were refused in this period.</div>`}
   </div>
 
+  ${r.trf_daily_file ? `<div class="card">
+    <h2>Trade reporting file (TRF) <span class="muted">${r.trf_daily_file.trades.length} trades · MPID ${esc(r.trf_daily_file.reporting_party_mpid)} · <a href="/reports/${id}/trf_daily_file.csv">CSV</a></span></h2>
+    <p class="muted" style="margin:0 0 10px;font-size:13px">Venue reports as <b>principal</b> (${esc(r.trf_daily_file.capacity)}). ${esc(r.trf_daily_file.note)}</p>
+    ${r.trf_daily_file.trades.length ? `<div class="scroll"><table><thead><tr><th>Control #</th><th>Exec (ET)</th><th>Symbol</th><th>Qty</th><th>Price</th><th>Notional</th><th>Reporting party</th><th>Side / Cap.</th><th>Contra</th><th>Side / Cap.</th><th>Late</th><th>Trade ID</th></tr></thead><tbody>
+    ${r.trf_daily_file.trades.map(t => `<tr><td class="mono">${esc(t.control_number)}</td><td>${esc(t.execution_time_et)}</td><td>${t.symbol}</td><td>${t.quantity}</td><td>$${fmt(t.price_usd)}</td><td>$${fmt(t.notional_usd)}</td><td class="mono">${t.reporting_party_mpid}</td><td>${t.reporting_party_side} / ${t.reporting_party_capacity}</td><td class="mono" title="${t.contra_wallet_masked}">${esc(t.contra_party_id)}</td><td>${t.contra_party_side} / ${t.contra_party_capacity}</td><td class="${t.late_indicator === "Y" ? "bad" : "ok"}">${t.late_indicator}</td><td class="mono"><a href="${txLink(t.trade_id)}" target="_blank">${short(t.trade_id)}</a></td></tr>`).join("")}</tbody></table></div>` : `<div class="empty">No trades in this period.</div>`}
+  </div>
+
+  <div class="card">
+    <h2>Public tape verification · 10-minute rule <span class="muted"><a href="/reports/${id}/public_tape_verification.csv">CSV</a></span></h2>
+    ${(() => { const sm = r.public_tape_verification.summary; const ok = sm.late === 0; return `
+    <div class="tiles" style="margin-bottom:12px">
+      <div class="tile"><div class="l">Executions</div><div class="v">${sm.trades}</div></div>
+      <div class="tile"><div class="l">Published ≤ 10 min</div><div class="v ok">${sm.published_within_10_min}</div></div>
+      <div class="tile"><div class="l">Late</div><div class="v ${sm.late ? "bad" : "ok"}">${sm.late}</div><div class="s">${sm.unknown ? sm.unknown + " unmeasured (restart)" : ""}</div></div>
+      <div class="tile"><div class="l">Latency</div><div class="v">${sm.avg_latency_sec}s avg</div><div class="s">max ${sm.max_latency_sec}s</div></div>
+      <div class="tile"><div class="l">Verdict</div><div class="v">${ok ? '<span class="pill g">COMPLIANT</span>' : '<span class="pill r">LATE REPORTS</span>'}</div></div>
+    </div>
+    <p class="muted" style="margin:0 0 10px;font-size:13px">${esc(sm.attestation)} Published in JSON, CSV and HTML.</p>`; })()}
+    ${r.public_tape_verification.trades.length ? `<div class="scroll"><table><thead><tr><th>Executed (UTC)</th><th>Published (UTC)</th><th>Latency</th><th>≤ 10 min</th><th>Side</th><th>Price</th><th>Size</th><th>Trade ID</th></tr></thead><tbody>
+    ${r.public_tape_verification.trades.map(v => `<tr><td class="mono">${esc(v.executed_utc).replace("T"," ").slice(0,19)}</td><td class="mono">${esc(v.published_utc).replace("T"," ").slice(0,19) || "—"}</td><td>${v.latency_sec === "" ? "—" : v.latency_sec + "s"}</td><td class="${v.within_10_min === "YES" ? "ok" : v.within_10_min === "NO" ? "bad" : "muted"}">${esc(v.within_10_min)}</td><td>${v.side_published}</td><td>$${fmt(v.price_published)}</td><td>${v.size_published}</td><td class="mono"><a href="${txLink(v.trade_id)}" target="_blank">${short(v.trade_id)}</a></td></tr>`).join("")}</tbody></table></div>` : ""}
+  </div>
+
+  <div class="card">
+    <h2>End-of-day pool reserves &amp; TVL <span class="muted">pool ${short(r.eod_pool_state.pool_address)} · <a href="/reports/${id}/eod_pool_state.csv">CSV</a></span></h2>
+    <div class="scroll"><table><thead><tr><th>Day (UTC)</th><th>Snapshot</th><th>tNVDA reserve</th><th>USDC reserve</th><th>Ref. price</th><th>TVL (USD)</th><th>Pair volume (sh)</th><th>USDC volume</th><th>Trades</th><th>Note</th></tr></thead><tbody>
+    ${r.eod_pool_state.days.map(d => `<tr><td>${d.day_utc}</td><td class="mono">${esc(d.snapshot_utc).replace("T"," ").slice(0,16) || "—"}</td><td>${d.tnvda_reserve === "" ? "—" : Number(d.tnvda_reserve).toLocaleString()}</td><td>${d.usdc_reserve === "" ? "—" : fmt(d.usdc_reserve)}</td><td>$${fmt(d.reference_price_usd)}</td><td>${d.tvl_usd === "" ? "—" : "$" + fmt(d.tvl_usd)}</td><td>${d.pair_share_volume}</td><td>$${fmt(d.pair_usdc_volume)}</td><td>${d.trades}</td><td class="muted">${esc(d.note)}</td></tr>`).join("")}</tbody></table></div>
+  </div>
+
+  <div class="card">
+    <h2>Reference pricing log <span class="muted">${r.pricing_log.observations.length} observations · <a href="/reports/${id}/pricing_log.csv">CSV</a></span></h2>
+    <div class="kv" style="margin-bottom:10px"><span class="l">Sources</span><span>${r.pricing_log.summary.sources.join(", ") || "—"}</span><span class="l">Range</span><span>${r.pricing_log.summary.min == null ? "—" : "$" + fmt(r.pricing_log.summary.min) + " – $" + fmt(r.pricing_log.summary.max)}</span><span class="l">Methodology</span><span class="muted">${esc(r.pricing_log.summary.methodology)}</span></div>
+    ${r.pricing_log.observations.length ? `<div class="scroll" style="max-height:260px"><table><thead><tr><th>Time (UTC)</th><th>Source</th><th>Feed</th><th>Price</th><th>Context</th><th>Order</th></tr></thead><tbody>
+    ${r.pricing_log.observations.map(o => `<tr><td class="mono">${esc(o.timestamp_utc).replace("T"," ").slice(0,19)}</td><td>${esc(o.source)}</td><td class="muted">${esc(o.feed)}</td><td>$${fmt(o.price_usd)}</td><td>${esc(o.context)}</td><td class="mono">${esc(o.order_id)}</td></tr>`).join("")}</tbody></table></div>` : `<div class="empty">No price observations recorded in this period (pricing log starts with orders placed after this feature was added).</div>`}
+  </div>` : ""}
+
   ${r.volume_cap_report ? `<div class="card">
     <h2>Tiered volume cap &amp; ADV tracking <span class="muted"><a href="/reports/${id}/volume_cap_monthly.csv">Monthly CSV</a> · <a href="/reports/${id}/volume_cap_log.csv">Log CSV</a></span></h2>
     <p class="muted" style="margin:0 0 12px;font-size:13px">${esc(r.volume_cap_report.rule)}</p>
