@@ -1,0 +1,331 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>TSV · Invest</title>
+<link rel="icon" href="/icon.svg">
+<script src="https://unpkg.com/@solana/web3.js@1.98.0/lib/index.iife.min.js"></script>
+<script src="https://unpkg.com/qrcode@1.5.4/build/qrcode.js"></script>
+<style>
+  :root { --bg:#0b1220; --card:#121a2b; --line:#233049; --text:#e6edf7; --muted:#8a9bb8; --ok:#4ade80; --bad:#f87171; --warn:#fbbf24; --accent:#60a5fa; --accent2:#3b82f6; }
+  * { box-sizing:border-box; }
+  html { -webkit-text-size-adjust:100%; }
+  body { margin:0; background:var(--bg); color:var(--text); font:16px/1.5 -apple-system,BlinkMacSystemFont,"Segoe UI",Inter,sans-serif; }
+  a { color:var(--accent); text-decoration:none; }
+  header { position:sticky; top:0; z-index:5; background:rgba(11,18,32,.92); backdrop-filter:blur(8px); display:flex; align-items:center; justify-content:space-between; padding:12px 16px; border-bottom:1px solid var(--line); gap:8px; }
+  header .brand { display:flex; align-items:center; gap:10px; font-weight:700; }
+  header .brand img { width:28px; height:28px; }
+  header .brand small { color:var(--muted); font-weight:400; }
+  .btn { background:var(--accent); color:#04111f; border:0; border-radius:12px; padding:12px 18px; font-weight:600; font-size:15px; cursor:pointer; }
+  .btn.sm { padding:8px 14px; font-size:14px; }
+  .btn.ghost { background:transparent; color:var(--text); border:1px solid var(--line); }
+  .btn.sell { background:var(--bad); color:#1a0505; }
+  .btn:disabled { opacity:.45; cursor:not-allowed; }
+  .banner { display:none; padding:12px 16px; text-align:center; font-weight:600; }
+  .banner.halt { display:block; background:#3b0d0d; color:#fecaca; border-bottom:1px solid var(--bad); }
+  .banner.warn { display:block; background:#2a1f05; color:#fde68a; border-bottom:1px solid var(--warn); }
+  main { max-width:960px; margin:0 auto; padding:16px; display:grid; gap:16px; grid-template-columns:minmax(0,1fr) minmax(0,1fr); }
+  @media (max-width:760px){ main { grid-template-columns:1fr; } }
+  .full { grid-column:1 / -1; }
+  .card { background:var(--card); border:1px solid var(--line); border-radius:16px; padding:18px; min-width:0; }
+  .card h2 { margin:0 0 12px; font-size:13px; text-transform:uppercase; letter-spacing:.8px; color:var(--muted); display:flex; justify-content:space-between; align-items:center; }
+  .pill { display:inline-block; padding:5px 11px; border-radius:999px; font-size:12px; font-weight:600; border:1px solid var(--line); white-space:nowrap; }
+  .pill.g { color:var(--ok); border-color:var(--ok); } .pill.r { color:var(--bad); border-color:var(--bad); } .pill.y { color:var(--warn); border-color:var(--warn); }
+  .muted { color:var(--muted); } .mono { font-family:ui-monospace,SFMono-Regular,Menlo,monospace; font-size:13px; }
+  .total { font-size:34px; font-weight:700; letter-spacing:-.5px; }
+  .kv { display:grid; grid-template-columns:1fr auto; gap:8px 12px; font-size:15px; }
+  .kv .l { color:var(--muted); }
+  .pos { color:var(--ok); } .neg { color:var(--bad); }
+  .seg { display:flex; background:#0b1220; border:1px solid var(--line); border-radius:12px; padding:4px; }
+  .seg button { flex:1; background:transparent; color:var(--muted); border:0; border-radius:9px; padding:10px; font-weight:600; font-size:15px; cursor:pointer; }
+  .seg button.on { background:var(--card); color:var(--text); box-shadow:0 1px 0 var(--line); }
+  .seg button.on.sellmode { color:var(--bad); }
+  .amount { display:flex; align-items:center; gap:8px; background:#0b1220; border:1px solid var(--line); border-radius:12px; padding:6px 6px 6px 14px; margin:12px 0; }
+  .amount input { flex:1; background:transparent; border:0; color:var(--text); font-size:28px; font-weight:600; min-width:0; outline:none; }
+  .amount .unit { background:var(--card); border:1px solid var(--line); border-radius:9px; padding:8px 12px; font-weight:600; cursor:pointer; white-space:nowrap; }
+  .quote { border-top:1px solid var(--line); margin-top:12px; padding-top:12px; }
+  .result { border-radius:12px; padding:14px; margin-top:12px; display:none; }
+  .result.ok { display:block; background:#052e16; border:1px solid var(--ok); }
+  .result.err { display:block; background:#3b0d0d; border:1px solid var(--bad); }
+  .result.busy { display:block; background:#0b1220; border:1px solid var(--line); }
+  .result b { display:block; margin-bottom:4px; }
+  details { margin-top:8px; } summary { cursor:pointer; color:var(--muted); font-size:13px; }
+  table { width:100%; border-collapse:collapse; font-size:14px; }
+  th, td { text-align:left; padding:10px 6px; border-bottom:1px solid var(--line); }
+  th { color:var(--muted); font-weight:500; font-size:11px; text-transform:uppercase; letter-spacing:.6px; }
+  td a { color:var(--accent); }
+  .tiles { display:grid; grid-template-columns:repeat(auto-fit,minmax(130px,1fr)); gap:10px; }
+  .tile { background:#0b1220; border:1px solid var(--line); border-radius:12px; padding:12px; }
+  .tile .l { color:var(--muted); font-size:11px; text-transform:uppercase; letter-spacing:.6px; } .tile .v { font-size:18px; font-weight:600; }
+  footer { max-width:960px; margin:0 auto; padding:8px 16px 40px; color:var(--muted); font-size:13px; line-height:1.7; }
+  /* modal */
+  .modal { position:fixed; inset:0; background:rgba(0,0,0,.6); display:none; align-items:flex-end; justify-content:center; z-index:20; }
+  .modal.open { display:flex; }
+  .sheet { background:var(--card); border:1px solid var(--line); border-radius:18px 18px 0 0; width:100%; max-width:560px; max-height:92vh; overflow:auto; padding:18px; }
+  @media (min-width:760px){ .modal { align-items:center; } .sheet { border-radius:18px; } }
+  .sheet iframe { width:100%; height:600px; border:0; border-radius:12px; background:#fff; }
+  .tabs { display:flex; gap:8px; margin-bottom:12px; }
+  .tabs button { flex:1; }
+  #qr { display:flex; flex-direction:column; align-items:center; gap:10px; padding:10px 0; }
+  #qr canvas { background:#fff; padding:10px; border-radius:12px; }
+  .empty { color:var(--muted); padding:16px 0; text-align:center; }
+</style>
+</head>
+<body>
+<header>
+  <div class="brand"><img src="/icon.svg" alt=""><div>TSV Invest<br><small>tNVDA · tokenized NVIDIA</small></div></div>
+  <div style="display:flex;gap:8px;align-items:center">
+    <span id="elig" class="pill">Not connected</span>
+    <button id="connectBtn" class="btn sm">Connect wallet</button>
+  </div>
+</header>
+<div id="banner" class="banner"></div>
+
+<main>
+  <section class="card">
+    <h2>Portfolio <span id="walletShort" class="mono muted"></span></h2>
+    <div class="total" id="total">—</div>
+    <div class="muted" style="margin-bottom:12px">Total value (USD)</div>
+    <div class="kv">
+      <span class="l">tNVDA</span><span><b id="hTnvda">—</b> <span class="muted" id="hTnvdaVal"></span></span>
+      <span class="l">Cash (USDC)</span><span><b id="hUsdc">—</b></span>
+      <span class="l">Avg cost</span><span id="hAvg">—</span>
+      <span class="l">Unrealized P&amp;L</span><span id="hUnreal">—</span>
+      <span class="l">Realized P&amp;L</span><span id="hReal">—</span>
+    </div>
+    <div style="display:flex;gap:8px;margin-top:14px">
+      <button id="fundBtn" class="btn ghost" style="flex:1">Add funds</button>
+      <button id="stmtBtn" class="btn ghost" style="flex:1">Statement (CSV)</button>
+    </div>
+  </section>
+
+  <section class="card">
+    <h2>Trade</h2>
+    <div class="seg"><button id="sideBuy" class="on">Buy</button><button id="sideSell">Sell</button></div>
+    <div class="amount">
+      <input id="amt" type="number" inputmode="decimal" min="0" step="any" placeholder="0">
+      <span id="unit" class="unit" title="Switch between USD and shares">USD ▾</span>
+    </div>
+    <div class="kv quote">
+      <span class="l">Price</span><span id="qPrice">—</span>
+      <span class="l" id="qRecvL">You receive</span><span id="qRecv">—</span>
+      <span class="l">Venue fee</span><span>$0.00</span>
+      <span class="l">Network fee</span><span>≈ $0.001 (paid in SOL)</span>
+      <span class="l">Settlement</span><span>Instant · final on confirmation</span>
+    </div>
+    <button id="reviewBtn" class="btn" style="width:100%;margin-top:14px" disabled>Review order</button>
+    <div id="result" class="result"></div>
+  </section>
+
+  <section class="card">
+    <h2>Market · tNVDA <a href="/tape.html" style="font-size:12px;text-transform:none;letter-spacing:0">Public tape ↗</a></h2>
+    <div class="tiles">
+      <div class="tile"><div class="l">Price</div><div class="v" id="mPrice">—</div></div>
+      <div class="tile"><div class="l">Status</div><div class="v" id="mStatus">—</div></div>
+      <div class="tile"><div class="l">Today's volume</div><div class="v" id="mVol">—</div></div>
+      <div class="tile"><div class="l">Pool liquidity</div><div class="v" id="mLiq">—</div></div>
+    </div>
+    <p class="muted" style="margin:12px 0 0;font-size:13px" id="mNote">Trading follows Nasdaq: halts on the primary exchange halt tNVDA automatically. Monthly volume limits apply.</p>
+  </section>
+
+  <section class="card">
+    <h2>My activity</h2>
+    <div style="overflow:auto"><table><thead><tr><th>Date</th><th>Side</th><th>tNVDA</th><th>USD</th><th>Price</th><th></th></tr></thead><tbody id="act"><tr><td colspan="6" class="empty">Connect a wallet to see your trades.</td></tr></tbody></table></div>
+  </section>
+</main>
+
+<footer>
+  <b>Digital Vector Solutions — Tokenized Securities Venue (prototype, Solana devnet).</b> This venue is <b>not registered with, and has not been reviewed or endorsed by, the U.S. Securities and Exchange Commission</b>. Open to verified U.S. persons only. No margin, lending or hypothecation. Securities involve risk of loss.
+  <a href="/disclosures.html">Disclosures &amp; fee schedule</a> · <a href="/tape.html">Public trade tape</a> · <a href="/">Engineering view</a>
+</footer>
+
+<div id="modal" class="modal"><div class="sheet">
+  <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px"><b style="font-size:17px">Add funds</b><button id="closeModal" class="btn ghost sm">Close</button></div>
+  <div class="tabs"><button id="tabCard" class="btn sm">Card / Apple Pay</button><button id="tabRecv" class="btn ghost sm">Receive USDC</button></div>
+  <div id="paneCard"><p class="muted" style="margin:0 0 10px;font-size:13px">Buy USDC with MoonPay. Identity verification is completed in the widget; funds are delivered to your connected wallet.</p><div id="mp"></div></div>
+  <div id="paneRecv" style="display:none"><p class="muted" style="margin:0 0 6px;font-size:13px">Send USDC (Solana) to your wallet address:</p><div id="qr"><canvas id="qrc"></canvas><div class="mono" id="addr"></div><button id="copyAddr" class="btn ghost sm">Copy address</button></div></div>
+</div></div>
+
+<script>
+const { Connection, PublicKey, Transaction } = solanaWeb3;
+const conn = new Connection("https://api.devnet.solana.com", "confirmed");
+const $ = (id) => document.getElementById(id);
+const fmt = (n, d = 2) => Number(n).toLocaleString(undefined, { minimumFractionDigits: d, maximumFractionDigits: d });
+const short = (s) => s.slice(0, 4) + "…" + s.slice(-4);
+const txLink = (sig) => `https://explorer.solana.com/tx/${sig}?cluster=devnet`;
+let cfg, wallet = null, pubkey = null, side = "buy", unit = "USD", port = null, venue = null, pending = null;
+
+function getProvider() { return window.backpack?.solana ?? (window.phantom?.solana?.isPhantom ? window.phantom.solana : window.solana ?? null); }
+
+async function connect() {
+  wallet = getProvider();
+  if (!wallet) { alert("No Solana wallet found. Install Phantom or Backpack and switch it to Devnet."); return; }
+  const r = await wallet.connect();
+  pubkey = new PublicKey((r?.publicKey ?? wallet.publicKey).toString());
+  $("connectBtn").textContent = "Connected"; $("connectBtn").disabled = true;
+  $("walletShort").textContent = short(pubkey.toBase58());
+  await refresh();
+}
+
+async function refresh() {
+  venue = await fetch("/api/venue").then(r => r.json());
+  renderMarket();
+  if (!pubkey) return;
+  port = await fetch(`/api/portfolio/${pubkey.toBase58()}`).then(r => r.json());
+  renderPortfolio(); renderBanner(); quote();
+  const act = await fetch(`/api/activity/${pubkey.toBase58()}`).then(r => r.json());
+  renderActivity(act);
+}
+
+function renderBanner() {
+  const b = $("banner");
+  const halted = port?.halted === true || venue?.halted === true;
+  if (halted) { b.className = "banner halt"; b.textContent = venue?.primaryMarket?.status === "HALTED" ? `⛔ Trading halted · ${venue.primaryMarket.reason}` : "⛔ Trading is halted by the venue. Orders cannot be executed until trading resumes."; return; }
+  if (port && port.eligibility.status !== "eligible") { b.className = "banner warn"; b.textContent = `${port.eligibility.label} — ${port.eligibility.detail}`; return; }
+  b.className = "banner"; b.textContent = "";
+}
+
+function renderPortfolio() {
+  const e = port.eligibility, h = port.holdings;
+  $("elig").textContent = e.label; $("elig").className = "pill " + (e.status === "eligible" ? "g" : e.status === "pending" ? "y" : "r");
+  $("total").textContent = "$" + fmt(h.totalValue);
+  $("hTnvda").textContent = fmt(h.tnvda, 4); $("hTnvdaVal").textContent = `($${fmt(h.tnvdaValue)})`;
+  $("hUsdc").textContent = "$" + fmt(h.usdc);
+  $("hAvg").textContent = h.avgCost == null ? "—" : "$" + fmt(h.avgCost);
+  const pl = (v) => `<span class="${v > 0 ? "pos" : v < 0 ? "neg" : ""}">${v >= 0 ? "+" : "−"}$${fmt(Math.abs(v))}</span>`;
+  $("hUnreal").innerHTML = pl(h.unrealized); $("hReal").innerHTML = pl(h.realized);
+  $("reviewBtn").disabled = e.status !== "eligible" || port.halted === true;
+}
+
+function renderMarket() {
+  const p = venue.pool;
+  $("mPrice").textContent = "$" + fmt(p.priceUsdcPerTnvda);
+  const halted = venue.halted === true;
+  $("mStatus").textContent = halted ? "Halted" : "Open"; $("mStatus").style.color = halted ? "var(--bad)" : "var(--ok)";
+  $("mVol").textContent = `${fmt(p.dailyTnvdaVolume, 4)} sh`;
+  $("mLiq").textContent = p.tnvdaLiquidity == null ? "—" : `${Number(p.tnvdaLiquidity).toLocaleString(undefined,{maximumFractionDigits:0})} sh`;
+  if (!pubkey) renderBanner();
+}
+
+function renderActivity(rows) {
+  const b = $("act");
+  if (!rows.length) { b.innerHTML = `<tr><td colspan="6" class="empty">No trades yet.</td></tr>`; return; }
+  b.innerHTML = rows.map(t => `<tr>
+    <td>${new Date(t.blockTime * 1000).toLocaleString(undefined, { dateStyle: "medium", timeStyle: "short" })}</td>
+    <td class="${t.side === "buy" ? "pos" : "neg"}">${t.side === "buy" ? "Buy" : "Sell"}</td>
+    <td>${fmt(t.tnvdaOut, 4)}</td><td>$${fmt(t.usdcIn)}</td><td>$${fmt(t.price)}</td>
+    <td><a href="${txLink(t.signature)}" target="_blank" title="${t.signature}">receipt ↗</a></td></tr>`).join("");
+}
+
+// ---- trade ticket
+function setSide(s) {
+  side = s;
+  $("sideBuy").className = s === "buy" ? "on" : ""; $("sideSell").className = s === "sell" ? "on sellmode" : "";
+  $("reviewBtn").className = "btn" + (s === "sell" ? " sell" : ""); $("reviewBtn").style.width = "100%";
+  $("qRecvL").textContent = s === "buy" ? "You receive" : "You receive";
+  $("result").className = "result"; pending = null; quote();
+}
+$("sideBuy").onclick = () => setSide("buy"); $("sideSell").onclick = () => setSide("sell");
+$("unit").onclick = () => { unit = unit === "USD" ? "tNVDA" : "USD"; $("unit").textContent = unit + " ▾"; quote(); };
+$("amt").addEventListener("input", () => { pending = null; $("reviewBtn").textContent = "Review order"; quote(); });
+
+function amounts() {
+  const v = Number($("amt").value || 0), price = cfg.priceUsdcPerTnvda;
+  if (!(v > 0)) return null;
+  return unit === "USD" ? { usdc: v, tnvda: v / price } : { usdc: v * price, tnvda: v };
+}
+function quote() {
+  if (!cfg) return;
+  $("qPrice").textContent = `$${fmt(cfg.priceUsdcPerTnvda)} per tNVDA`;
+  const a = amounts();
+  if (!a) { $("qRecv").textContent = "—"; return; }
+  $("qRecv").textContent = side === "buy" ? `${fmt(a.tnvda, 6)} tNVDA` : `$${fmt(a.usdc)} USDC`;
+  if (port && side === "buy" && a.usdc > port.holdings.usdc) $("qRecv").innerHTML += ` <span class="neg">· insufficient USDC</span>`;
+  if (port && side === "sell" && a.tnvda > port.holdings.tnvda) $("qRecv").innerHTML += ` <span class="neg">· insufficient tNVDA</span>`;
+}
+
+function friendly(reason) {
+  const r = String(reason ?? "");
+  if (r.includes("SanctionedEntity")) return "This order can't be executed: the account is restricted following sanctions screening.";
+  if (r.includes("NotUSPerson")) return "This order can't be executed: this venue is open to verified U.S. persons only.";
+  if (r.includes("KycNotCleared")) return "This order can't be executed: identity verification has not cleared.";
+  if (r.includes("TradingHalted")) return "This order can't be executed: trading is currently halted.";
+  if (r.includes("AccountNotInitialized")) return "This order can't be executed: the account is not verified with the venue.";
+  if (r.includes("insufficient") || r.includes("0x1")) return "Insufficient balance for this order.";
+  if (r.includes("User rejected")) return "You cancelled the request in your wallet.";
+  return "The network rejected this order.";
+}
+
+async function review() {
+  const a = amounts(); if (!a) return;
+  const res = $("result");
+  if (!pending) {
+    res.className = "result busy"; res.innerHTML = `<b>Checking with the network…</b>`;
+    try {
+      const r = await fetch(`/api/swap?side=${side}&tnvda=${a.tnvda}`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ account: pubkey.toBase58() }) }).then(r => r.json());
+      if (r.error || !r.transaction) throw new Error(r.error ?? "server error");
+      if (!r.preview.ok) { res.className = "result err"; res.innerHTML = `<b>Order cannot be executed</b>${friendly(r.preview.reason)}<details><summary>Details</summary><span class="mono">${r.preview.reason}</span></details>`; return; }
+      pending = r;
+      res.className = "result busy";
+      res.innerHTML = `<b>Review your order</b>${side === "buy" ? "Buy" : "Sell"} <b>${fmt(r.tnvda, 6)} tNVDA</b> ${side === "buy" ? "for" : "and receive"} <b>$${fmt(r.usdc)} USDC</b> at $${fmt(r.price)} · venue fee $0.00 · settles instantly.<br><span class="muted">Pre-trade compliance check passed. Confirm to sign in your wallet.</span>`;
+      $("reviewBtn").textContent = side === "buy" ? "Confirm buy" : "Confirm sell";
+    } catch (e) { res.className = "result err"; res.innerHTML = `<b>Something went wrong</b>${e.message}`; }
+    return;
+  }
+  // confirm
+  $("reviewBtn").disabled = true;
+  res.className = "result busy"; res.innerHTML = `<b>Waiting for your wallet…</b>`;
+  try {
+    const tx = Transaction.from(Uint8Array.from(atob(pending.transaction), c => c.charCodeAt(0)));
+    const { signature } = await wallet.signAndSendTransaction(tx);
+    res.innerHTML = `<b>Submitted — settling on Solana…</b>`;
+    await conn.confirmTransaction(signature, "confirmed");
+    res.className = "result ok";
+    res.innerHTML = `<b>Filled ✔</b>${side === "buy" ? "Bought" : "Sold"} ${fmt(pending.tnvda, 6)} tNVDA at $${fmt(pending.price)} · $${fmt(pending.usdc)} · Settled.<details><summary>Details</summary><a href="${txLink(signature)}" target="_blank" class="mono">${signature}</a></details>`;
+    $("amt").value = "";
+  } catch (e) {
+    const logs = e.logs ?? e.transactionLogs ?? [];
+    const reason = logs.find(l => l.includes("Error Code")) ?? e.message;
+    res.className = "result err"; res.innerHTML = `<b>Order not executed</b>${friendly(reason)}<details><summary>Details</summary><span class="mono">${reason}</span></details>`;
+  } finally {
+    pending = null; $("reviewBtn").textContent = "Review order"; $("reviewBtn").disabled = false;
+    setTimeout(refresh, 1500);
+  }
+}
+$("reviewBtn").onclick = review;
+
+// ---- add funds
+$("fundBtn").onclick = async () => {
+  if (!pubkey) { connect(); return; }
+  $("modal").classList.add("open");
+  showTab("card");
+  if (cfg.moonpayPublishableKey) {
+    const lookup = (u) => fetch(u).then(r => r.json()).then(j => j.ip).catch(() => "");
+    const ips = (await Promise.all([lookup("https://api64.ipify.org?format=json"), lookup("https://api.ipify.org?format=json")])).filter(Boolean);
+    const r = await fetch(`/api/moonpay-url?wallet=${pubkey.toBase58()}&ips=${encodeURIComponent(ips.join(","))}`).then(r => r.json());
+    $("mp").innerHTML = `<iframe allow="accelerometer; autoplay; camera; gyroscope; payment" src="${r.url}"></iframe>`;
+  } else {
+    $("mp").innerHTML = `<p class="muted">Card purchases are not configured on this server.</p>`;
+  }
+  $("addr").textContent = pubkey.toBase58();
+  QRCode.toCanvas($("qrc"), `solana:${pubkey.toBase58()}?spl-token=${cfg.usdcMint}`, { width: 200 });
+};
+function showTab(t) { $("paneCard").style.display = t === "card" ? "" : "none"; $("paneRecv").style.display = t === "recv" ? "" : "none"; $("tabCard").className = "btn sm" + (t === "card" ? "" : " ghost"); $("tabRecv").className = "btn sm" + (t === "recv" ? "" : " ghost"); }
+$("tabCard").onclick = () => showTab("card"); $("tabRecv").onclick = () => showTab("recv");
+$("closeModal").onclick = () => { $("modal").classList.remove("open"); $("mp").innerHTML = ""; refresh(); };
+$("copyAddr").onclick = () => navigator.clipboard.writeText(pubkey.toBase58());
+$("stmtBtn").onclick = () => { if (pubkey) location.href = `/api/activity/${pubkey.toBase58()}?format=csv`; };
+
+(async () => {
+  cfg = await fetch("/api/config").then(r => r.json());
+  $("connectBtn").onclick = connect;
+  quote();
+  await refresh();
+  const p = getProvider();
+  if (p) { try { await p.connect({ onlyIfTrusted: true }); await connect(); } catch {} }
+  setInterval(() => refresh().catch(() => {}), 12000);
+})();
+</script>
+</body>
+</html>

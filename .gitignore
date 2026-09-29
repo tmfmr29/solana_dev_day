@@ -12,3 +12,5 @@ devnet/tnvda-mint.json
 node_modules
 target
 test-ledger
+devnet/reports/
+devnet/rejected.json

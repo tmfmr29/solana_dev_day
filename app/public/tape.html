@@ -1,0 +1,46 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+<title>TSV Public Tape</title><link rel="icon" href="/icon.svg">
+<style>
+  :root { --bg:#0b1220; --card:#121a2b; --line:#233049; --text:#e6edf7; --muted:#8a9bb8; --ok:#4ade80; --bad:#f87171; --accent:#60a5fa; }
+  * { box-sizing:border-box; } body { margin:0; background:var(--bg); color:var(--text); font:15px/1.5 -apple-system,BlinkMacSystemFont,"Segoe UI",Inter,sans-serif; }
+  a { color:var(--accent); text-decoration:none; }
+  header { display:flex; align-items:center; justify-content:space-between; padding:14px 20px; border-bottom:1px solid var(--line); gap:10px; flex-wrap:wrap; }
+  header h1 { font-size:17px; margin:0; } header h1 span { color:var(--muted); font-weight:400; }
+  main { max-width:1100px; margin:0 auto; padding:20px 16px; }
+  .tiles { display:grid; grid-template-columns:repeat(auto-fit,minmax(150px,1fr)); gap:10px; margin-bottom:18px; }
+  .tile { background:var(--card); border:1px solid var(--line); border-radius:12px; padding:12px; }
+  .tile .l { color:var(--muted); font-size:11px; text-transform:uppercase; letter-spacing:.6px; } .tile .v { font-size:18px; font-weight:600; }
+  .card { background:var(--card); border:1px solid var(--line); border-radius:14px; padding:16px; overflow:auto; }
+  table { width:100%; border-collapse:collapse; font-size:14px; } th, td { text-align:left; padding:10px 8px; border-bottom:1px solid var(--line); white-space:nowrap; }
+  th { color:var(--muted); font-weight:500; font-size:11px; text-transform:uppercase; letter-spacing:.6px; }
+  .mono { font-family:ui-monospace,SFMono-Regular,Menlo,monospace; font-size:13px; } .muted { color:var(--muted); } .ok { color:var(--ok); } .bad { color:var(--bad); }
+  footer { max-width:1100px; margin:0 auto; padding:8px 16px 32px; color:var(--muted); font-size:13px; line-height:1.7; }
+</style></head>
+<body>
+<header><h1>Public Trade Tape <span>· tNVDA / USDC · Digital Vector Solutions TSV · Solana devnet</span></h1>
+<div><a href="/api/tape">JSON</a> · <a href="/api/tape.csv">CSV</a> · <a href="/api/venue">Venue metrics</a> · <a href="/investor.html">Invest</a></div></header>
+<main>
+  <div class="tiles">
+    <div class="tile"><div class="l">Venue</div><div class="v" id="st">—</div></div>
+    <div class="tile"><div class="l">Price</div><div class="v" id="px">—</div></div>
+    <div class="tile"><div class="l">Today's volume (UTC)</div><div class="v" id="vol">—</div></div>
+    <div class="tile"><div class="l">Pool liquidity</div><div class="v" id="liq">—</div></div>
+    <div class="tile"><div class="l">Trades today</div><div class="v" id="n">—</div></div>
+  </div>
+  <div class="card"><table><thead><tr><th>Executed (UTC)</th><th>Side</th><th>Wallet</th><th>tNVDA</th><th>USDC</th><th>USD price</th><th>Reported after</th><th>Signature</th></tr></thead><tbody id="rows"><tr><td colspan="8" class="muted">Loading…</td></tr></tbody></table></div>
+</main>
+<footer>Every trade on the venue is published here within 10 minutes of execution, with a masked counterparty, size, USD-denominated price, reporting latency and the immutable Solana transaction signature. Data remain freely available for at least 30 days. This venue is not registered with or endorsed by the SEC. <a href="/disclosures.html">Disclosures</a></footer>
+<script>
+const $ = (id) => document.getElementById(id), short = (s) => s.slice(0,4)+"…"+s.slice(-4);
+async function load() {
+  const [v, t] = await Promise.all([fetch("/api/venue").then(r=>r.json()), fetch("/api/tape").then(r=>r.json())]);
+  const p = v.pool; $("st").textContent = v.halted ? "Halted" : "Open"; $("st").className = "v " + (v.halted ? "bad" : "ok");
+  $("px").textContent = "$" + p.priceUsdcPerTnvda.toFixed(2); $("vol").textContent = p.dailyTnvdaVolume.toLocaleString(undefined,{maximumFractionDigits:4}) + " sh";
+  $("liq").textContent = p.tnvdaLiquidity == null ? "—" : Number(p.tnvdaLiquidity).toLocaleString(undefined,{maximumFractionDigits:0}) + " sh"; $("n").textContent = p.dailyTrades;
+  $("rows").innerHTML = t.length ? t.map(x => `<tr><td>${new Date(x.blockTime*1000).toISOString().replace("T"," ").slice(0,19)}</td><td class="${(x.side??"buy")==="buy"?"ok":"bad"}">${(x.side??"buy").toUpperCase()}</td><td class="mono">${x.buyerMasked}</td><td>${x.tnvdaOut}</td><td>${x.usdcIn}</td><td>$${(x.usdcIn/x.tnvdaOut).toFixed(2)}</td><td class="${x.backfilled?"muted":x.latencySec<=600?"ok":"bad"}">${x.backfilled?"back-filled":x.latencySec+"s"}</td><td class="mono"><a target="_blank" href="https://explorer.solana.com/tx/${x.signature}?cluster=devnet">${short(x.signature)}</a></td></tr>`).join("") : `<tr><td colspan="8" class="muted">No trades yet.</td></tr>`;
+}
+load(); setInterval(load, 8000);
+</script></body></html>

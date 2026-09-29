@@ -49,7 +49,8 @@
 <header>
   <h1>TSV Compliant Swap <span>· tNVDA / USDC · Solana devnet</span></h1>
   <div class="row">
-    <a href="/admin.html" style="color:var(--accent);text-decoration:none;font-size:14px">Admin console →</a>
+    <a href="/investor.html" style="color:var(--accent);text-decoration:none;font-size:14px">Investor app</a>
+    <a href="/admin.html" style="color:var(--accent);text-decoration:none;font-size:14px">Admin console</a>
     <span id="walletBadge" class="badge">No wallet</span>
     <button id="connectBtn">Connect wallet</button>
   </div>
@@ -96,8 +97,8 @@
     <h2>4 · Public trade tape <span class="muted" style="text-transform:none;letter-spacing:0">(SEC 10-minute reporting · auto-refreshes · <a href="/api/tape" style="color:var(--accent)">JSON</a> · <a href="/api/tape.csv" style="color:var(--accent)">CSV</a>)</span></h2>
     <div class="tape-wrap">
       <table>
-        <thead><tr><th>Executed (UTC)</th><th>Wallet</th><th>USDC in</th><th>tNVDA out</th><th>USD price</th><th>Reported after</th><th>Signature</th></tr></thead>
-        <tbody id="tape"><tr><td colspan="7" class="muted">No trades yet.</td></tr></tbody>
+        <thead><tr><th>Executed (UTC)</th><th>Side</th><th>Wallet</th><th>USDC</th><th>tNVDA</th><th>USD price</th><th>Reported after</th><th>Signature</th></tr></thead>
+        <tbody id="tape"><tr><td colspan="8" class="muted">No trades yet.</td></tr></tbody>
       </table>
     </div>
   </section>
@@ -221,9 +222,10 @@ async function loadVenue() {
 async function loadTape() {
   const rows = await fetch("/api/tape").then(r => r.json());
   const body = $("tape");
-  if (!rows.length) { body.innerHTML = `<tr><td colspan="7" class="muted">No trades yet.</td></tr>`; return; }
+  if (!rows.length) { body.innerHTML = `<tr><td colspan="8" class="muted">No trades yet.</td></tr>`; return; }
   body.innerHTML = rows.map(t => `<tr>
     <td>${new Date(t.blockTime * 1000).toISOString().replace("T"," ").slice(0,19)}</td>
+    <td class="${(t.side ?? "buy") === "buy" ? "ok" : "bad"}">${(t.side ?? "buy").toUpperCase()}</td>
     <td class="mono">${t.buyerMasked}</td>
     <td>${t.usdcIn.toLocaleString(undefined,{maximumFractionDigits:6})}</td>
     <td>${t.tnvdaOut.toLocaleString(undefined,{maximumFractionDigits:6})}</td>

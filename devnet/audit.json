@@ -1,0 +1,16 @@
+[
+  {
+    "ts": 1790708160,
+    "actor": "compliance officer (admin console)",
+    "action": "TRADING_HALT",
+    "details": "manual",
+    "signature": "5t4hpzecGijrLB3qw9yx9LZTKGQqgjC64hBSCXRtsmHSTLc4nErjAuvJyqmtHycnA4348P7F81JpR83nnFme4P8D"
+  },
+  {
+    "ts": 1790708166,
+    "actor": "compliance officer (admin console)",
+    "action": "TRADING_RESUME",
+    "details": "manual",
+    "signature": "57zbbFUJTio8hMDaWoAmstfpd5vr9SCR4YsgGZa8SxPGb8s9Q7oatM3gxkb4HtMnjW3uZtqA8EhPrUmNS1T2uT2t"
+  }
+]

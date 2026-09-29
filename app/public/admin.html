@@ -114,6 +114,26 @@
   </section>
 
   <section class="card">
+    <h2>Regulatory reporting <span class="muted" style="text-transform:none;letter-spacing:0">(daily EOD at 20:00 ET, monthly, or on demand)</span></h2>
+    <div class="row" style="margin-bottom:10px">
+      <button class="secondary" data-rep="today">Today</button>
+      <button class="secondary" data-rep="yesterday">Yesterday</button>
+      <button class="secondary" data-rep="month">Month to date</button>
+      <button class="secondary" data-rep="since_last">Since last report</button>
+      <span class="muted">or</span>
+      <input id="repFrom" type="datetime-local" class="small" style="width:auto"> <span class="muted">→</span> <input id="repTo" type="datetime-local" class="small" style="width:auto">
+      <button id="repCustom">Generate</button>
+    </div>
+    <p class="muted" style="margin:0 0 10px">Each report is a package: human-readable HTML, JSON envelope, and CSV tables (trade blotter, daily summary, compliance events, rejected orders). Content is SHA-256 hashed, chained to the previous report, and signed with the venue admin key. <span id="repNext"></span></p>
+    <div style="overflow:auto; max-height:300px">
+      <table>
+        <thead><tr><th>Report</th><th>Type</th><th>Period (ET)</th><th>Trades</th><th>Generated</th><th>Files</th><th>Hash</th></tr></thead>
+        <tbody id="repRows"><tr><td colspan="7" class="muted">No reports yet.</td></tr></tbody>
+      </table>
+    </div>
+  </section>
+
+  <section class="card">
     <h2>Audit trail <span class="muted" style="text-transform:none;letter-spacing:0">(books &amp; records · <a href="/api/audit.csv" style="color:var(--accent)">CSV</a> · <a href="/api/audit" style="color:var(--accent)">JSON</a>)</span></h2>
     <div style="overflow:auto; max-height:320px">
       <table>
@@ -214,14 +234,32 @@ function renderAudit(rows) {
   </tr>`).join("");
 }
 
-async function refresh() {
-  const [st, v, au] = await Promise.all([api("/api/admin/state"), api("/api/venue"), api("/api/audit")]);
-  state = st; render(); renderVenue(v); renderAudit(au);
+function renderReports(r) {
+  $("repNext").textContent = `Next scheduled daily report: ${r.nextDaily}${r.lastDailyFor ? ` (last daily covered ${r.lastDailyFor})` : ""}.`;
+  const body = $("repRows");
+  if (!r.reports.length) { body.innerHTML = `<tr><td colspan="7" class="muted">No reports yet.</td></tr>`; return; }
+  const et = (ts) => new Date(ts*1000).toLocaleString("en-US", { timeZone: "America/New_York", month:"short", day:"numeric", hour:"2-digit", minute:"2-digit", hour12:false });
+  body.innerHTML = r.reports.map(x => `<tr>
+    <td class="mono">${x.id}</td><td>${x.type}</td><td>${et(x.from)} → ${et(x.to)}</td><td>${x.trades}</td><td>${et(x.generatedAt)} · ${x.generatedBy.split(" (")[0]}</td>
+    <td>${x.files.map(f => `<a href="/reports/${x.id}/${f}" target="_blank" style="color:var(--accent);text-decoration:none;margin-right:6px">${f.replace(/\.(csv|json|html)$/, m => m.toUpperCase())}</a>`).join("")}</td>
+    <td class="mono" title="signature ${x.signature}">${x.hash.slice(0,12)}…</td></tr>`).join("");
 }
+
+async function refresh() {
+  const [st, v, au, rp] = await Promise.all([api("/api/admin/state"), api("/api/venue"), api("/api/audit"), api("/api/admin/reports")]);
+  state = st; render(); renderVenue(v); renderAudit(au); renderReports(rp);
+}
+
+document.querySelectorAll("[data-rep]").forEach(b => b.onclick = () => adminPost("/api/admin/report", { type: b.dataset.rep }, `Generate report: ${b.textContent}`));
+$("repCustom").onclick = () => {
+  const from = $("repFrom").value, to = $("repTo").value;
+  if (!from || !to) { log("✖ Pick a start and end for a custom report."); return; }
+  adminPost("/api/admin/report", { type: "adhoc", from: new Date(from).toISOString(), to: new Date(to).toISOString() }, `Generate ad-hoc report ${from} → ${to}`);
+};
 
 async function adminPost(path, body, label) {
   document.body.classList.add("busy");
-  try { log(`▶ ${label}`); const r = await api(path, body); if (r.signature) log(`✔ on-chain: ${txLink(r.signature)}`); else log("✔ saved"); await refresh(); }
+  try { log(`▶ ${label}`); const r = await api(path, body); if (r.id && r.hash) log(`✔ report ${r.id} — sha256 ${r.hash.slice(0,16)}… — open /reports/${r.id}/report.html`); else if (r.signature) log(`✔ on-chain: ${txLink(r.signature)}`); else log("✔ saved"); await refresh(); }
   catch (e) { log(`✖ ${e.message}`); }
   finally { document.body.classList.remove("busy"); }
 }

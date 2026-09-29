@@ -65,26 +65,32 @@
     <tr><td>Model</td><td>Spot only. Each trade is a single atomic Solana transaction: USDC from the investor to the venue, tNVDA from the venue to the investor. Either both legs settle or neither does.</td></tr>
     <tr><td>Settlement asset</td><td>Circle USDC (a non-security crypto asset). Devnet mint <span class="mono" id="usdc">—</span></td></tr>
     <tr><td>Pricing</td><td>Fixed reference price for the prototype (<span id="price">—</span> USDC per tNVDA). A production venue publishes its AMM curve and pool parameters.</td></tr>
-    <tr><td>Fees</td><td>Venue fee: <b>0.00%</b>. Network fee: paid by the investor (≈0.000005 SOL per transaction).</td></tr>
-    <tr><td>Clearing</td><td>On-chain, delivery-versus-payment, final at confirmation. No central counterparty; no intraday credit.</td></tr>
+    <tr><td>Fees</td><td>Venue swap fee: <b>0.00%</b> (0 USDC, 0 SOL) during the devnet phase. Network fees are paid by the investor's wallet directly to Solana validators and are not retained by the venue. Fiat-to-USDC conversions through MoonPay are subject to MoonPay's own fee schedule, disclosed at checkout. The venue receives <b>no payment for order flow</b>, rebates or routing compensation from any party.</td></tr>
+    <tr><td>Clearing</td><td>On-chain <b>delivery-versus-payment</b>: both legs of every trade settle in one transaction or not at all, final at confirmation. No central counterparty; no intraday credit; every trade is fully funded at the time of execution.</td></tr>
   </table>
 
   <h2>5 · Prohibited activity</h2>
   <ul>
     <li><b>No margin, credit or leverage.</b> The venue does not extend credit or permit borrowing against positions.</li>
-    <li><b>No hypothecation.</b> Venue assets are not lent, pledged or rehypothecated. Because tNVDA can only be held by whitelisted wallets, it cannot be deposited into lending protocols or other program-owned vaults that are not themselves permissioned.</li>
-    <li><b>No short sales</b> and no derivative instruments referencing tNVDA.</li>
+    <li><b>No hypothecation.</b> Venue assets are not lent, pledged or rehypothecated. Because tNVDA can only be held by whitelisted wallets, it cannot be deposited into lending protocols or other program-owned vaults that are not themselves permissioned; this restriction is enforced by the token's transfer hook, not by policy alone.</li>
+    <li><b>No short sales</b>, no derivative instruments referencing tNVDA, and no spot transaction that is not fully funded by the investor's wallet at execution.</li>
   </ul>
 
   <h2>6 · Trading halts</h2>
   <ul>
-    <li>tNVDA trading halts <b>concurrently</b> with any halt or suspension of NVDA on its primary listing exchange (LULD pauses, market-wide circuit breakers, regulatory halts).</li>
-    <li>The venue may halt trading at the direction of a regulator or on its own compliance judgment.</li>
-    <li>Halts are executed on-chain and block every transfer of tNVDA until lifted. Halt and resume events appear in the audit trail and on the dashboard.</li>
+    <li>tNVDA trading halts <b>concurrently</b> with any trading pause, Limit-Up/Limit-Down (LULD) interruption, market-wide circuit breaker, or regulatory suspension of NVDA initiated on its primary listing exchange (Nasdaq) or by FINRA, and resumes only when primary-market trading formally resumes.</li>
+    <li>The venue may also halt trading at the direction of a regulator or on its own compliance judgment.</li>
+    <li>Halts are executed on-chain and freeze every transfer of tNVDA, in every wallet and application, until lifted, so no off-venue or arbitrage execution is possible during a primary-market halt. Halt and resume events are recorded in the audit trail with their source and shown on the dashboard.</li>
+    <li><i>Prototype status:</i> the primary-market feed is simulated on this devnet deployment; the on-chain halt mechanism it drives is fully implemented.</li>
   </ul>
 
   <h2>7 · Volume limits</h2>
-  <p>Monthly venue volume in tNVDA is limited to <b><span id="capPct">—</span>% of NVDA's consolidated average daily volume</b>. Month-to-date usage is displayed on the dashboard and monitored continuously. A breach halts trading automatically; a second breach requires a three-month pause in tNVDA trading and an update to this notice within five business days.</p>
+  <p>tNVDA is treated as a <b>Tier 1 tokenized NMS stock</b> (NVDA is an S&amp;P 500 constituent). Aggregate monthly venue volume in tNVDA is limited to <b><span id="capPct">—</span>% of NVDA's consolidated average daily volume</b> across all national securities exchanges over the preceding calendar month.</p>
+  <ul>
+    <li>Month-to-date usage against the cap is published on the dashboard and monitored continuously from the trade tape by the venue's compliance monitor, which halts trading on-chain when the cap is reached.</li>
+    <li>A second breach within a rolling twelve-month period triggers a mandatory <b>three-month pause</b> in tNVDA trading.</li>
+    <li>Any breach is followed by an update to this notice within five business days, describing the breach and the actions taken.</li>
+  </ul>
 
   <h2>8 · Transparency and reporting</h2>
   <ul>
