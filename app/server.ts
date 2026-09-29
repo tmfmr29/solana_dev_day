@@ -51,6 +51,7 @@ type Venue = {
   nvdaAdvShares: number;      // consolidated average daily volume of NVDA (shares) — configurable for the demo
   capPct: number;             // Tier 1 monthly cap as % of ADV
   breaches: { month: string; at: number; mtdVolume: number; cap: number }[];
+  pauses?: { from: number; until: number; reason: string; breachCount: number }[];
   primaryMarket: { status: "OPEN" | "HALTED"; reason: string | null; since: number };
   listing: { issuer: string; ticker: string; noticeSentAt: string; objectionWindowEnds: string; status: string };
 };
@@ -418,6 +419,12 @@ async function checkVolumeCap() {
     saveVenue();
     const nth = venue.breaches.length;
     logAudit({ actor: "volume-cap monitor", action: "VOLUME_CAP_BREACH", details: `Breach #${nth}: MTD ${st.mtdVolume} tNVDA > cap ${st.cap} (${st.capPct}% of ADV ${st.nvdaAdvShares})` });
+    if (nth >= 2) {
+      const at = Math.floor(Date.now() / 1000), until = new Date(at * 1000); until.setUTCMonth(until.getUTCMonth() + 3);
+      (venue.pauses ??= []).push({ from: at, until: Math.floor(until.getTime() / 1000), reason: `Second Tier 1 cap breach (#${nth}) — mandatory 3-month trading pause`, breachCount: nth });
+      saveVenue();
+      logAudit({ actor: "volume-cap monitor", action: "CIRCUIT_BREAKER_PAUSE", details: `3-month trading pause in tNVDA until ${until.toISOString().slice(0, 10)} (breach #${nth})` });
+    }
     await setHaltOnChain(true, "volume-cap monitor", nth >= 2 ? `Second breach of Tier 1 cap — 3-month pause required` : `Tier 1 monthly volume cap breached`);
   } catch (e: any) { console.error("cap:", e.message); }
   finally { capCheckInFlight = false; }
@@ -547,6 +554,36 @@ async function generateReport(type: string, from: number, to: number, generatedB
   const catSummary = { events: catEvents.length, MENO: catEvents.filter((e) => e.type === "MENO").length, MEOR: catEvents.filter((e) => e.type === "MEOR").length, MEOT: catEvents.filter((e) => e.type === "MEOT").length, MEOC: catEvents.filter((e) => e.type === "MEOC").length,
     deadline: "08:00 ET on T+1", note: "Event types and fields are modeled on the CAT reporting specification (FINRA Rule 6800 series). A live submission must be validated against the current CAT technical specifications and transmitted through the CAT reporter interface." };
 
+  // Tiered volume cap & ADV tracking, per calendar month touched by the period.
+  const months: string[] = [];
+  for (let d = new Date(from * 1000); d.getTime() < to * 1000; d = new Date(Date.UTC(d.getUTCFullYear(), d.getUTCMonth() + 1, 1))) { const k = d.toISOString().slice(0, 7); if (!months.includes(k)) months.push(k); }
+  const capShares = venue.nvdaAdvShares * venue.capPct / 100;
+  const volumeCapReport = months.map((month) => {
+    const mt = [...tape.values()].filter((t) => monthKey(t.blockTime) === month).sort((a, b) => a.blockTime - b.blockTime);
+    let cum = 0, warningAt: number | null = null, breachAt: number | null = null;
+    const byDay = new Map<string, number>();
+    for (const t of mt) { cum += t.tnvdaOut; const day = new Date(t.blockTime * 1000).toISOString().slice(0, 10); byDay.set(day, (byDay.get(day) ?? 0) + t.tnvdaOut);
+      if (warningAt == null && cum >= capShares * 0.8) warningAt = t.blockTime; if (breachAt == null && cum > capShares) breachAt = t.blockTime; }
+    let running = 0;
+    const dailySeries = [...byDay.entries()].map(([day, v]) => { running += v; return { day, volume: +v.toFixed(6), cumulative: +running.toFixed(6), pct_of_cap: +((running / capShares) * 100).toFixed(4) }; });
+    const mtd = +cum.toFixed(6);
+    const breaches = venue.breaches.filter((b) => b.month === month);
+    const pauses = (venue.pauses ?? []).filter((p) => monthKey(p.from) === month);
+    const capEvents = audit.filter((a) => monthKey(a.ts) === month && (a.action === "VOLUME_CAP_BREACH" || a.action === "CIRCUIT_BREAKER_PAUSE" || (a.actor === "volume-cap monitor")));
+    const log: any[] = [];
+    if (warningAt != null) log.push({ timestamp_utc: fmtTs(warningAt), event: "WARNING_80PCT", details: `Cumulative volume reached 80% of the monthly cap (${(capShares * 0.8).toFixed(6)} tNVDA)` });
+    for (const b of breaches) log.push({ timestamp_utc: fmtTs(b.at), event: "CAP_BREACH", details: `MTD ${b.mtdVolume} tNVDA exceeded cap ${b.cap} tNVDA` });
+    for (const e of capEvents) log.push({ timestamp_utc: fmtTs(e.ts), event: e.action, details: e.details, onchain_signature: e.signature ?? "" });
+    for (const pz of pauses) log.push({ timestamp_utc: fmtTs(pz.from), event: "PAUSE_3_MONTHS", details: `${pz.reason}; trading pause until ${fmtTs(pz.until).slice(0, 10)}` });
+    log.sort((a, b) => a.timestamp_utc.localeCompare(b.timestamp_utc));
+    return { month, security: "tNVDA", underlying: "NVDA", tier: "Tier 1 tokenized NMS stock", adv_benchmark_shares: venue.nvdaAdvShares, adv_source: "Consolidated ADV, preceding calendar month (configured value; production venue sources from the SIP/consolidated tape)",
+      cap_pct_of_adv: venue.capPct, cap_shares: +capShares.toFixed(6), mtd_volume_shares: mtd, pct_of_cap_used: +((mtd / capShares) * 100).toFixed(4), trades: mt.length,
+      compliant: mtd <= capShares, warning_reached_utc: warningAt ? fmtTs(warningAt) : null, breach_utc: breachAt ? fmtTs(breachAt) : null, breaches_this_month: breaches.length, breaches_rolling_12m: venue.breaches.length,
+      pauses_triggered: pauses.length, daily_series: dailySeries, log };
+  });
+  const quarterOf = (m: string) => `${m.slice(0, 4)}-Q${Math.floor((+m.slice(5, 7) - 1) / 3) + 1}`;
+  const quarterly = [...new Set(months.map(quarterOf))].map((q) => { const ms = volumeCapReport.filter((m) => quarterOf(m.month) === q); return { quarter: q, months: ms.map((m) => m.month), total_volume_shares: +ms.reduce((a, m) => a + m.mtd_volume_shares, 0).toFixed(6), total_trades: ms.reduce((a, m) => a + m.trades, 0), months_in_breach: ms.filter((m) => !m.compliant).length, breaches: ms.reduce((a, m) => a + m.breaches_this_month, 0), pauses: ms.reduce((a, m) => a + m.pauses_triggered, 0), all_months_compliant: ms.every((m) => m.compliant) }; });
+
   const seq = (reportsIndex[reportsIndex.length - 1]?.seq ?? 0) + 1;
   const prevHash = reportsIndex[reportsIndex.length - 1]?.hash ?? null;
   const id = `${type}-${new Date(from * 1000).toISOString().slice(0, 10)}-${String(seq).padStart(4, "0")}`;
@@ -561,6 +598,7 @@ async function generateReport(type: string, from: number, to: number, generatedB
       pool_end_of_period: { tnvda_liquidity: pool.tnvdaLiquidity, usdc_liquidity: pool.usdcLiquidity, price_usd: pool.priceUsdcPerTnvda }, participants: roster },
     trade_blotter: blotter, daily_summary: daily, compliance_events: evRows, rejected_orders: rejRows,
     cat_daily_file: { summary: catSummary, events: catRows },
+    volume_cap_report: { rule: `Monthly venue volume in a Tier 1 tokenized NMS stock ≤ ${venue.capPct}% of the security's consolidated ADV; second breach in a rolling 12 months → 3-month trading pause`, months: volumeCapReport, quarters: quarterly },
   };
   const canonical = JSON.stringify(body);
   const hash = crypto.createHash("sha256").update(canonical).digest("hex");
@@ -577,9 +615,11 @@ async function generateReport(type: string, from: number, to: number, generatedB
   fs.writeFileSync(path.join(dir, "compliance_events.csv"), toCsv(evRows));
   fs.writeFileSync(path.join(dir, "rejected_orders.csv"), toCsv(rejRows));
   fs.writeFileSync(path.join(dir, "cat_daily_file.csv"), toCsv(catRows));
+  fs.writeFileSync(path.join(dir, "volume_cap_monthly.csv"), toCsv(volumeCapReport.map(({ daily_series, log, ...m }) => m)));
+  fs.writeFileSync(path.join(dir, "volume_cap_log.csv"), toCsv(volumeCapReport.flatMap((m) => m.log.map((l) => ({ month: m.month, ...l })))));
   fs.writeFileSync(path.join(dir, "cat_daily_file.json"), JSON.stringify({ reporter: VENUE_IMID, report_id: id, period_start_utc: fmtTs(from), period_end_utc: fmtTs(to), ...catSummary, events: catRows }, null, 2));
   fs.writeFileSync(path.join(dir, "report.html"), renderReportHtml(envelope));
-  const meta: ReportMeta = { id, seq, type, from, to, generatedAt: now, generatedBy, trades: trades.length, hash, prevHash, signature, files: ["report.html", "report.json", "trade_blotter.csv", "daily_summary.csv", "compliance_events.csv", "rejected_orders.csv", "cat_daily_file.csv", "cat_daily_file.json"] };
+  const meta: ReportMeta = { id, seq, type, from, to, generatedAt: now, generatedBy, trades: trades.length, hash, prevHash, signature, files: ["report.html", "report.json", "trade_blotter.csv", "daily_summary.csv", "compliance_events.csv", "rejected_orders.csv", "cat_daily_file.csv", "cat_daily_file.json", "volume_cap_monthly.csv", "volume_cap_log.csv"] };
   reportsIndex.push(meta); fs.writeFileSync(REPORTS_INDEX, JSON.stringify(reportsIndex, null, 2));
   logAudit({ actor: generatedBy, action: "REGULATORY_REPORT", details: `${id}: ${trades.length} trades, ${rej.length} rejections, ${events.length} events; sha256 ${hash.slice(0, 16)}…` });
   return meta;
@@ -606,7 +646,10 @@ table{border-collapse:collapse;width:100%;font-size:12px}th,td{border:1px solid 
 <h2>5 · Compliance events (${r.compliance_events.length})</h2>${table(r.compliance_events)}
 <h2>6 · Rejected orders (${r.rejected_orders.length})</h2>${table(r.rejected_orders)}
 <h2>7 · CAT daily file (${r.cat_daily_file.events.length} events · ${esc(r.cat_daily_file.summary.MENO)} MENO / ${esc(r.cat_daily_file.summary.MEOR)} MEOR / ${esc(r.cat_daily_file.summary.MEOT)} MEOT / ${esc(r.cat_daily_file.summary.MEOC)} MEOC · due ${esc(r.cat_daily_file.summary.deadline)})</h2><p class="muted">${esc(r.cat_daily_file.summary.note)}</p>${table(r.cat_daily_file.events, ["type","eventTimestamp","orderID","firmDesignatedID","side","quantity","price","executionPrice","executedQuantity","liquidityIndicator","blockHeight","tradeID","rejectCode"])}
-<h2>8 · Attestation</h2><div class="box">${esc(r.attestation.statement)}<br><br><span class="mono">content_sha256: ${esc(r.attestation.content_sha256)}<br>signer (venue admin key): ${esc(r.attestation.signer)}<br>signature (${esc(r.attestation.algorithm)}): ${esc(r.attestation.signature)}</span><br><br><span class="muted">Verify: recompute SHA-256 over the canonical JSON body (all fields except <i>attestation</i>) and check the ed25519 signature against the signer's public key. Each trade_id is a Solana transaction signature that can be independently confirmed on-chain.</span></div>
+<h2>8 · Tiered volume cap &amp; ADV tracking</h2><p class="muted">${esc(r.volume_cap_report.rule)}</p>${table(r.volume_cap_report.months.map((m: any) => ({ month: m.month, adv_benchmark_shares: m.adv_benchmark_shares, cap_pct_of_adv: m.cap_pct_of_adv, cap_shares: m.cap_shares, mtd_volume_shares: m.mtd_volume_shares, pct_of_cap_used: m.pct_of_cap_used, trades: m.trades, compliant: m.compliant ? "YES" : "NO", warning_reached_utc: m.warning_reached_utc ?? "", breach_utc: m.breach_utc ?? "", breaches_this_month: m.breaches_this_month, breaches_rolling_12m: m.breaches_rolling_12m, pauses_triggered: m.pauses_triggered })))}
+${r.volume_cap_report.quarters.length ? `<h3 style="font-size:13px;margin:12px 0 6px">Quarterly roll-up</h3>${table(r.volume_cap_report.quarters.map((q: any) => ({ ...q, months: q.months.join(", "), all_months_compliant: q.all_months_compliant ? "YES" : "NO" })))}` : ""}
+<h3 style="font-size:13px;margin:12px 0 6px">Breach &amp; circuit-breaker log</h3>${table(r.volume_cap_report.months.flatMap((m: any) => m.log.map((l: any) => ({ month: m.month, ...l }))))}
+<h2>9 · Attestation</h2><div class="box">${esc(r.attestation.statement)}<br><br><span class="mono">content_sha256: ${esc(r.attestation.content_sha256)}<br>signer (venue admin key): ${esc(r.attestation.signer)}<br>signature (${esc(r.attestation.algorithm)}): ${esc(r.attestation.signature)}</span><br><br><span class="muted">Verify: recompute SHA-256 over the canonical JSON body (all fields except <i>attestation</i>) and check the ed25519 signature against the signer's public key. Each trade_id is a Solana transaction signature that can be independently confirmed on-chain.</span></div>
 <p class="muted" style="margin-top:28px">This venue is a devnet prototype and is not registered with or endorsed by the U.S. Securities and Exchange Commission.</p>
 </body></html>`;
 }
@@ -634,7 +677,27 @@ setInterval(async () => {
   }
 }, 60000);
 
-app.get("/api/admin/reports", localOnly, (_req, res) => res.json({ reports: [...reportsIndex].reverse(), nextDaily: "20:00 ET (EOD) and 07:30 ET (CAT T+1 file for previous day)", lastDailyFor, lastCatFor }));
+// Monthly (1st of month, 07:45 ET, prior month) and quarterly (Jan/Apr/Jul/Oct 1, prior quarter).
+let lastMonthlyFor: string | null = reportsIndex.filter((r) => r.type === "monthly").map((r) => monthKey(r.from)).pop() ?? null;
+let lastQuarterlyFor: string | null = reportsIndex.filter((r) => r.type === "quarterly").map((r) => monthKey(r.from)).pop() ?? null;
+setInterval(async () => {
+  const now = new Date(), p = etParts(now);
+  if (p.d !== 1 || p.h < 7 || (p.h === 7 && p.min < 45)) return;
+  const prevMonth = new Date(Date.UTC(p.y, p.m - 2, 1)).toISOString().slice(0, 7);
+  if (lastMonthlyFor !== prevMonth) {
+    lastMonthlyFor = prevMonth; const [f] = etDayBounds(prevMonth + "-01"); const [t] = etDayBounds(p.date);
+    try { await generateReport("monthly", f, t, "scheduler (monthly, 1st 07:45 ET)"); } catch (e: any) { console.error("monthly report:", e.message); }
+  }
+  if ([1, 4, 7, 10].includes(p.m)) {
+    const qStart = new Date(Date.UTC(p.y, p.m - 4, 1)).toISOString().slice(0, 7);
+    if (lastQuarterlyFor !== qStart) {
+      lastQuarterlyFor = qStart; const [f] = etDayBounds(qStart + "-01"); const [t] = etDayBounds(p.date);
+      try { await generateReport("quarterly", f, t, "scheduler (quarterly, 1st 07:45 ET)"); } catch (e: any) { console.error("quarterly report:", e.message); }
+    }
+  }
+}, 60000);
+
+app.get("/api/admin/reports", localOnly, (_req, res) => res.json({ reports: [...reportsIndex].reverse(), nextDaily: "20:00 ET (EOD) · 07:30 ET (CAT T+1) · 1st of month 07:45 ET (monthly; quarterly on Jan/Apr/Jul/Oct)", lastDailyFor, lastCatFor, lastMonthlyFor, lastQuarterlyFor }));
 app.post("/api/admin/report", localOnly, async (req, res) => {
   try {
     const type = String(req.body.type ?? "adhoc");
@@ -643,6 +706,9 @@ app.post("/api/admin/report", localOnly, async (req, res) => {
     if (type === "today") [from, to] = etDayBounds(today);
     else if (type === "yesterday") { const d = new Date(); d.setUTCDate(d.getUTCDate() - 1); [from, to] = etDayBounds(etParts(d).date); }
     else if (type === "month") { const [f] = etDayBounds(today.slice(0, 8) + "01"); from = f; to = now; }
+    else if (type === "monthly") { const d = new Date(); const prev = new Date(Date.UTC(d.getUTCFullYear(), d.getUTCMonth() - 1, 1)); const pk = prev.toISOString().slice(0, 7); const [f] = etDayBounds(pk + "-01"); const [t] = etDayBounds(today.slice(0, 8) + "01"); from = f; to = t; }
+    else if (type === "quarter") { const d = new Date(); const qm = Math.floor(d.getUTCMonth() / 3) * 3; const [f] = etDayBounds(`${d.getUTCFullYear()}-${String(qm + 1).padStart(2, "0")}-01`); from = f; to = now; }
+    else if (type === "quarterly") { const d = new Date(); const qm = Math.floor(d.getUTCMonth() / 3) * 3; const start = new Date(Date.UTC(d.getUTCFullYear(), qm - 3, 1)), end = new Date(Date.UTC(d.getUTCFullYear(), qm, 1)); const [f] = etDayBounds(start.toISOString().slice(0, 10)); const [t] = etDayBounds(end.toISOString().slice(0, 10)); from = f; to = t; }
     else if (type === "since_last") { from = reportsIndex[reportsIndex.length - 1]?.to ?? 0; to = now; }
     else { from = Math.floor(new Date(req.body.from).getTime() / 1000); to = Math.floor(new Date(req.body.to).getTime() / 1000); if (!(from < to)) throw new Error("invalid range"); }
     to = Math.min(to, now);

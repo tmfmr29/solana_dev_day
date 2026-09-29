@@ -38,6 +38,13 @@
   .verify { border:1px solid var(--line); border-radius:12px; padding:14px; background:#0b1220; }
   .verify.good { border-color:var(--ok); } .verify.badv { border-color:var(--bad); }
   .links a { margin-right:10px; }
+  .capchart { position:relative; display:grid; gap:4px; padding-right:8px; }
+  .capchart .row { display:grid; grid-template-columns:90px 1fr 120px; align-items:center; gap:10px; font-size:12px; }
+  .capchart .track { position:relative; height:12px; background:#0b1220; border:1px solid var(--line); border-radius:6px; overflow:visible; }
+  .capchart .fill { height:100%; background:var(--accent); border-radius:6px; }
+  .capchart .fill.w { background:var(--warn); } .capchart .fill.b { background:var(--bad); }
+  .capchart .mark { position:absolute; top:-3px; bottom:-3px; width:2px; background:var(--warn); opacity:.8; } .capchart .mark.cap { background:var(--bad); }
+  .legend { font-size:12px; color:var(--muted); margin-top:6px; }
 </style></head>
 <body>
 <header>
@@ -47,7 +54,7 @@
 <div class="layout">
   <aside class="rail">
     <h2>Reports <span id="count" class="muted"></span></h2>
-    <div class="links" style="margin-bottom:10px"><button class="secondary" style="padding:6px 10px;font-size:13px" data-gen="today">Generate today</button> <button class="secondary" style="padding:6px 10px;font-size:13px" data-gen="since_last">Since last</button></div>
+    <div class="links" style="margin-bottom:10px"><button class="secondary" style="padding:6px 10px;font-size:13px" data-gen="today">Generate today</button> <button class="secondary" style="padding:6px 10px;font-size:13px" data-gen="since_last">Since last</button> <button class="secondary" style="padding:6px 10px;font-size:13px" data-gen="month">Month to date</button> <button class="secondary" style="padding:6px 10px;font-size:13px" data-gen="monthly">Last month</button> <button class="secondary" style="padding:6px 10px;font-size:13px" data-gen="quarter">Quarter to date</button> <button class="secondary" style="padding:6px 10px;font-size:13px" data-gen="quarterly">Last quarter</button></div>
     <div id="list"><div class="empty">No reports yet. Generate one from the admin console or the buttons above.</div></div>
   </aside>
   <main id="main"><div class="card"><div class="empty">Select a report.</div></div></main>
@@ -125,6 +132,27 @@ async function show(id) {
     ${r.rejected_orders.length ? `<div class="scroll"><table><thead><tr><th>Time (UTC)</th><th>Counterparty</th><th>Side</th><th>Qty</th><th>Notional</th><th>Code</th><th>Reason</th></tr></thead><tbody>
     ${r.rejected_orders.map(x => `<tr><td>${esc(x.timestamp_utc).replace("T"," ").slice(0,19)}</td><td class="mono">${x.wallet_masked} <span class="muted">${x.counterparty_id.slice(0,8)}</span></td><td>${x.side}</td><td>${x.quantity}</td><td>$${fmt(x.notional_usd)}</td><td class="mono warn">${esc(x.rejection_code)}</td><td style="word-break:break-word" class="muted">${esc(x.reason)}</td></tr>`).join("")}</tbody></table></div>` : `<div class="empty">No orders were refused in this period.</div>`}
   </div>
+
+  ${r.volume_cap_report ? `<div class="card">
+    <h2>Tiered volume cap &amp; ADV tracking <span class="muted"><a href="/reports/${id}/volume_cap_monthly.csv">Monthly CSV</a> · <a href="/reports/${id}/volume_cap_log.csv">Log CSV</a></span></h2>
+    <p class="muted" style="margin:0 0 12px;font-size:13px">${esc(r.volume_cap_report.rule)}</p>
+    ${r.volume_cap_report.months.map(m => `
+      <div style="border:1px solid var(--line);border-radius:12px;padding:14px;margin-bottom:12px">
+        <div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:8px;margin-bottom:10px"><b>${m.month} · ${esc(m.security)} (${esc(m.tier)})</b> ${m.compliant ? `<span class="pill g">WITHIN CAP · ${fmt(m.pct_of_cap_used, 2)}% used</span>` : `<span class="pill r">CAP BREACHED · ${fmt(m.pct_of_cap_used, 2)}% used</span>`}</div>
+        <div class="tiles" style="margin-bottom:12px">
+          <div class="tile"><div class="l">ADV benchmark (NVDA)</div><div class="v">${Number(m.adv_benchmark_shares).toLocaleString()}</div><div class="s">shares · preceding month</div></div>
+          <div class="tile"><div class="l">Cap (${m.cap_pct_of_adv}% of ADV)</div><div class="v">${Number(m.cap_shares).toLocaleString()}</div><div class="s">tNVDA / month</div></div>
+          <div class="tile"><div class="l">MTD volume</div><div class="v">${m.mtd_volume_shares}</div><div class="s">${m.trades} trades</div></div>
+          <div class="tile"><div class="l">Warning (80%)</div><div class="v ${m.warning_reached_utc ? "warn" : "ok"}">${m.warning_reached_utc ? "reached" : "not reached"}</div><div class="s">${m.warning_reached_utc ? esc(m.warning_reached_utc).replace("T"," ").slice(0,16) + " UTC" : ""}</div></div>
+          <div class="tile"><div class="l">Breaches</div><div class="v ${m.breaches_this_month ? "bad" : "ok"}">${m.breaches_this_month}</div><div class="s">${m.breaches_rolling_12m} on rolling 12-month record</div></div>
+          <div class="tile"><div class="l">Circuit-breaker pauses</div><div class="v ${m.pauses_triggered ? "bad" : "ok"}">${m.pauses_triggered}</div><div class="s">3-month pauses triggered</div></div>
+        </div>
+        ${m.daily_series.length ? `<div class="capchart">${m.daily_series.map(d => { const pct = Math.min(120, d.pct_of_cap); return `<div class="row"><span>${d.day.slice(5)}</span><div class="track"><div class="fill ${d.pct_of_cap >= 100 ? "b" : d.pct_of_cap >= 80 ? "w" : ""}" style="width:${Math.min(100, pct / 1.2)}%"></div><div class="mark" style="left:${80/1.2}%"></div><div class="mark cap" style="left:${100/1.2}%"></div></div><span class="muted">${d.cumulative} cum · ${fmt(d.pct_of_cap, 2)}%</span></div>`; }).join("")}</div>
+        <div class="legend">Bars: cumulative month-to-date volume by day · <span class="warn">│</span> 80% warning · <span class="bad">│</span> 100% cap</div>` : `<div class="empty">No trades this month.</div>`}
+        ${m.log.length ? `<div class="scroll" style="margin-top:12px"><table><thead><tr><th>Time (UTC)</th><th>Event</th><th>Details</th><th>On-chain</th></tr></thead><tbody>${m.log.map(l => `<tr><td class="mono">${esc(l.timestamp_utc).replace("T"," ").slice(0,19)}</td><td class="mono ${l.event.includes("BREACH") || l.event.includes("PAUSE") || l.event.includes("HALT") ? "bad" : "warn"}">${esc(l.event)}</td><td style="word-break:break-word">${esc(l.details)}</td><td class="mono">${l.onchain_signature ? `<a href="${txLink(l.onchain_signature)}" target="_blank">${short(l.onchain_signature)}</a>` : "—"}</td></tr>`).join("")}</tbody></table></div>` : `<div class="muted" style="margin-top:10px;font-size:13px">No warnings, breaches or pauses this month.</div>`}
+      </div>`).join("")}
+    ${r.volume_cap_report.quarters.length && r.volume_cap_report.months.length > 1 ? `<h2 style="margin-top:6px">Quarterly roll-up</h2><table><thead><tr><th>Quarter</th><th>Months</th><th>Volume (sh)</th><th>Trades</th><th>Months in breach</th><th>Breaches</th><th>Pauses</th><th>Status</th></tr></thead><tbody>${r.volume_cap_report.quarters.map(q => `<tr><td>${q.quarter}</td><td>${q.months.join(", ")}</td><td>${q.total_volume_shares}</td><td>${q.total_trades}</td><td>${q.months_in_breach}</td><td>${q.breaches}</td><td>${q.pauses}</td><td>${q.all_months_compliant ? '<span class="pill g">COMPLIANT</span>' : '<span class="pill r">BREACH</span>'}</td></tr>`).join("")}</tbody></table>` : ""}
+  </div>` : ""}
 
   ${r.cat_daily_file ? `<div class="card">
     <h2>CAT daily file <span class="muted">${r.cat_daily_file.events.length} events · due ${esc(r.cat_daily_file.summary.deadline)} · <a href="/reports/${id}/cat_daily_file.csv">CSV</a> · <a href="/reports/${id}/cat_daily_file.json">JSON</a></span></h2>
