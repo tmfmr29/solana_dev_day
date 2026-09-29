@@ -47,22 +47,34 @@ Everything below is live on **Solana devnet**.
 | tNVDA mint (Token-2022, hook attached) | [`6RhaBrNoX8iEUiE7iXjpbTbK3UHsYLJhBGX5H6fBcbgc`](https://explorer.solana.com/address/6RhaBrNoX8iEUiE7iXjpbTbK3UHsYLJhBGX5H6fBcbgc?cluster=devnet) |
 | Settlement asset | Circle devnet USDC `4zMMC9srt5Ri5X14GAgXhaHii3GnPAEERYPJgZJDncDU` |
 
-## What it does
+## Features
 
-1. **Compliance enforced by the protocol, not the app.** `tNVDA` is a Token-2022 mint with a
-   *transfer hook* pointing at this program. Token-2022 calls the hook on **every** transfer, from
-   any wallet or app, and refuses to move tokens unless the hook approves. The hook checks:
-   - a global **trading halt** flag (admin switch),
-   - the sender and receiver are not **OFAC-sanctioned**,
-   - the receiver is a **verified U.S. person** who has **cleared KYC**,
-   - it is being invoked by Token-2022 mid-transfer (not called directly).
-2. **Compliant swap.** One atomic transaction: buyer's USDC → treasury, treasury's tNVDA → buyer.
-   Built as a Solana Pay transaction request and signed in Phantom/Backpack. If the buyer isn't
-   whitelisted, the *whole* transaction is rejected by the network.
-3. **Fiat on-ramp.** MoonPay sandbox widget (signed, IP-bound URLs) so a verified U.S. person can
-   buy USDC with a card and land it in the wallet that then swaps.
-4. **10-minute reporting tape.** An indexer watches the treasury and publishes each trade
-   (masked wallet, USDC in, tNVDA out, USD price, reporting latency, tx signature) within seconds.
+**On-chain program (Anchor, Token-2022 transfer hook)**
+- Hook runs on every tNVDA transfer; checks trading halt, OFAC flags on both parties, receiver is a KYC-cleared U.S. person, and that it's being invoked by Token-2022 mid-transfer (anti-spoof).
+- Admin-only configuration PDA: whitelist changes and halts require the venue admin key.
+- On-chain `security.txt`; 12-case end-to-end test suite on a local validator.
+
+**Trading & settlement**
+- Buy **and sell** tNVDA against Circle USDC in one atomic transaction (delivery-versus-payment), built server-side as a Solana Pay transaction request and signed in Phantom/Backpack.
+- Pre-flight simulation shows the on-chain verdict before the wallet prompt; every request is an **order** with an ID written into the transaction as a memo.
+- MoonPay sandbox on-ramp with signed, IP-bound widget URLs.
+
+**Compliance operations (admin console)**
+- Per-wallet KYC flags (US person / OFAC sanctioned / KYC cleared) with one-click whitelist, sanction, revoke.
+- Trading halt switch; **Tier 1 volume-cap monitor** (MTD volume vs. % of NVDA ADV) that halts automatically on breach and records a 3-month pause on a second breach.
+- Simulated primary-exchange feed (LULD pause / market-wide circuit breaker) driving real on-chain halts, with source attribution.
+- Listing / issuer-notice card; persisted audit trail of every admin and automated action with on-chain signatures.
+
+**Regulatory reporting**
+- Signed report packages (HTML print view, JSON envelope, CSV tables): trade blotter, daily OHLC/VWAP summary, compliance events, rejected orders, **CAT-style order lifecycle file** (MENO/MEOR/MEOT/MEOC), **volume cap & ADV tracking** with breach/circuit-breaker log, quarterly roll-up.
+- SHA-256 content hash, chained to the previous report, Ed25519-signed by the venue key; the reports dashboard verifies all three in the browser.
+- Scheduled: 20:00 ET daily, 07:30 ET CAT T+1, monthly on the 1st, quarterly on Jan/Apr/Jul/Oct. On demand for any range.
+
+**Investor experience**
+- Eligibility banner, portfolio with average cost and realized/unrealized P&L, plain-language buy/sell ticket with review step, add funds (card or receive-USDC QR), activity with CSV statement. Compliance failures read as sentences, not error codes.
+
+**Public transparency**
+- Trade tape (masked wallet, size, USD price, reporting latency, tx signature) within seconds; pool metrics; JSON/CSV feeds; public notice & disclosures page.
 
 ## Pages
 
@@ -90,12 +102,19 @@ Set `RPC_URL` in `app/.env` to a dedicated devnet endpoint (e.g. Helius) — the
 ## Repository layout
 
 ```
-programs/tsv_swap/src/lib.rs   the on-chain program (Anchor)
+programs/tsv_swap/src/lib.rs   the on-chain program (Anchor): config, KYC profiles, halt, transfer hook
 tests/tsv_swap.ts              end-to-end test on a local validator (12 cases)
 scripts/                       devnet tooling: setup-tnvda, kyc, halt, demo-revert, demo-swap
-app/server.ts                  dashboard server: Solana Pay endpoint, MoonPay signing, trade tape
-app/public/index.html          the dashboard
-devnet/config.json             addresses of the deployed devnet setup
+app/server.ts                  server: Solana Pay swap builder (buy/sell), admin API, order book of record,
+                               tape indexer, volume-cap monitor, report generator + schedulers, MoonPay signing
+app/public/investor.html       investor app
+app/public/admin.html          compliance officer console
+app/public/reports.html        regulatory reports dashboard (with in-browser verification)
+app/public/tape.html           public trade tape
+app/public/disclosures.html    public notice
+app/public/index.html          engineering view
+devnet/                        config.json (addresses), venue.json, audit.json, tape.json, orders.json, reports/
+DEMO.md · VIDEO_SCRIPT.md      demo-day checklist and video script
 ```
 
 ## Program instructions
@@ -134,14 +153,16 @@ Terminal demo of the protocol-level revert (no browser needed):
 npx ts-node --transpile-only scripts/demo-revert.ts
 ```
 
-## Demo script
+## Demo walkthrough
 
-1. Connect a wallet → status **NOT WHITELISTED**.
-2. Execute swap → pre-flight shows the network will revert (`AccountNotInitialized`), wallet blocks it.
-3. `npm run kyc -- <WALLET>` → refresh → **WHITELISTED**.
-4. Execute swap → confirmed; appears on the trade tape within seconds with an explorer link.
-5. `npm run halt -- on` → swap → `TradingHalted`. `npm run halt -- off` → swap → confirmed.
-6. MoonPay panel: buy USDC with a sandbox card, delivered to the connected wallet.
+Investor app on the left, admin console on the right (see `DEMO.md` for the full checklist).
+
+1. Investor connects → **Trading restricted** (sanctioned wallet). Buy → refused at pre-flight by the transfer hook.
+2. Admin console → **Whitelist** → investor refreshes → **eligible** → Buy → Confirm in Phantom → **Filled ✔**, settled in ~2 s.
+3. Admin → **Simulate LULD pause** → investor sees a red halt banner → Buy → refused (`TradingHalted`). **Primary resumes.**
+4. Admin → volume-cap gauge: set a small ADV, trade past the cap → automatic halt, breach logged.
+5. Reports dashboard → **Since last** → blotter, CAT events, rejected order, halt → **Verify** → hash, signature and chain all green.
+6. Public tape shows each trade with its reporting latency; disclosures page carries the SEC notice.
 
 ## Attribution
 

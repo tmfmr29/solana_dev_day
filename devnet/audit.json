@@ -44,5 +44,47 @@
     "action": "TRADING_RESUME",
     "details": "manual",
     "signature": "5syt3qY4VzTMuWcm13zWDN7XhwbLJAow1qCV1AQKPgnTpDWpWy3tbVGUBFscgh55uYHBYsZ7CT1iuXdHkTCcAQQd"
+  },
+  {
+    "ts": 1790716853,
+    "actor": "compliance officer (admin console)",
+    "action": "TRADING_HALT",
+    "details": "manual",
+    "signature": "zYiFnKyyb4yD8yQNRpWTJJzmP4xVGSegTCy559H4nVpbjFxTcRAUY8a2UnLZvRKz3dHvRGrkiJjd1JvxsNSKj3j"
+  },
+  {
+    "ts": 1790716858,
+    "actor": "compliance officer (admin console)",
+    "action": "TRADING_RESUME",
+    "details": "manual",
+    "signature": "3TR6frGMdC8SNMg3hXdSRAWHvL8cx23RtPgQPjAVCdaRmaSzLE8uxwuu6zenoaVVudZ2GV52yhjk9khPvMvX8d76"
+  },
+  {
+    "ts": 1790716861,
+    "actor": "primary-market feed (simulated Nasdaq)",
+    "action": "TRADING_HALT",
+    "details": "Market-wide circuit breaker (Level 1) on primary exchange",
+    "signature": "3b7mBnpjtRLnuszLukcGuxeGDqs36ZF4VveJbUSYhjfNLBf1RdQBVdneaC3upJz37cWARUvMQABvtLiu2HPRKJmW"
+  },
+  {
+    "ts": 1790716865,
+    "actor": "primary-market feed (simulated Nasdaq)",
+    "action": "TRADING_RESUME",
+    "details": "NVDA trading resumed on primary exchange",
+    "signature": "4FhVybR5pg6FC5aX3NPZA5P1BGcG25syEkwV6PwgRSDiXagpeVuHjKjWZJsqJgTcX24fyT47vf82cJx99YJB5RC"
+  },
+  {
+    "ts": 1790716873,
+    "actor": "compliance officer (admin console)",
+    "action": "KYC_UPDATE",
+    "details": "5Wzrjp7PJXbh7koDibHP9hkeV8J2b1QdXzuEo6W6SfR3 us=true sanctioned=true cleared=true",
+    "signature": "5jek3PoCEFKp5aEDwZRFYuwH4iCB4ftK9gFX89NcCJLWwQ6KCaYXr4emMsJvVjwGqW3qLp5yCQzm9bZtFANRqeZw"
+  },
+  {
+    "ts": 1790716879,
+    "actor": "compliance officer (admin console)",
+    "action": "KYC_UPDATE",
+    "details": "5Wzrjp7PJXbh7koDibHP9hkeV8J2b1QdXzuEo6W6SfR3 us=true sanctioned=false cleared=true",
+    "signature": "3T3MXu6638iEaud5jpkzCSaiWGFG1AkLUfkopgoAvVNwfu3RTa1h6CqDu2HPh9VtTLwmZGQCW3S3deCM4eH85ubu"
   }
 ]

@@ -1,0 +1,17 @@
+{
+  "nvdaAdvShares": 200000000,
+  "capPct": 0.25,
+  "breaches": [],
+  "primaryMarket": {
+    "status": "OPEN",
+    "reason": null,
+    "since": 1790716864
+  },
+  "listing": {
+    "issuer": "NVIDIA Corporation",
+    "ticker": "NVDA",
+    "noticeSentAt": "2026-08-15",
+    "objectionWindowEnds": "2026-09-14",
+    "status": "Listed — no issuer objection received"
+  }
+}
