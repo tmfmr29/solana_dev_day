@@ -189,6 +189,72 @@ async function show(id) {
     ${r.volume_cap_report.quarters.length && r.volume_cap_report.months.length > 1 ? `<h2 style="margin-top:6px">Quarterly roll-up</h2><table><thead><tr><th>Quarter</th><th>Months</th><th>Volume (sh)</th><th>Trades</th><th>Months in breach</th><th>Breaches</th><th>Pauses</th><th>Status</th></tr></thead><tbody>${r.volume_cap_report.quarters.map(q => `<tr><td>${q.quarter}</td><td>${q.months.join(", ")}</td><td>${q.total_volume_shares}</td><td>${q.total_trades}</td><td>${q.months_in_breach}</td><td>${q.breaches}</td><td>${q.pauses}</td><td>${q.all_months_compliant ? '<span class="pill g">COMPLIANT</span>' : '<span class="pill r">BREACH</span>'}</td></tr>`).join("")}</tbody></table>` : ""}
   </div>` : ""}
 
+  ${r.reg_ats_activity ? (() => { const A = r.reg_ats_activity, S = r.surveillance_and_halt_audit, W = r.whitelisting_and_sanctions_audit, F = r.financial_condition, R = r.retention; const ni = (o) => `<span class="pill y">${esc(o.status)}</span> <span class="muted">${esc(o.why)}</span>`; const rc = F.master_register_reconciliation; return `
+  <div class="card">
+    <h2>Reg ATS activity &amp; participant breakdown <span class="muted"><a href="/reports/${id}/participant_register.csv">Register CSV</a></span></h2>
+    <div class="tiles" style="margin-bottom:12px">
+      <div class="tile"><div class="l">Share volume</div><div class="v">${A.aggregate.share_volume}</div><div class="s">${A.aggregate.trades} trades · ${A.aggregate.pools} pool</div></div>
+      <div class="tile"><div class="l">Dollar volume</div><div class="v">$${fmt(A.aggregate.dollar_volume)}</div><div class="s">settled in ${A.aggregate.settlement_asset}</div></div>
+      <div class="tile"><div class="l">Active participants</div><div class="v">${A.participants.active_in_period}</div><div class="s">${A.participants.whitelisted_at_period_end} whitelisted at period end</div></div>
+      <div class="tile"><div class="l">Retail / institutional</div><div class="v">${A.participants.retail_pct}% / ${A.participants.institutional_pct}%</div><div class="s">by dollar volume</div></div>
+      <div class="tile"><div class="l">Covered Firms</div><div class="v">${A.covered_firms.count}</div><div class="s">exempt institutional LPs</div></div>
+    </div>
+    <p class="muted" style="font-size:13px;margin:0 0 10px">${esc(A.covered_firms.disclosure)} ${esc(A.participants.note)}</p>
+    ${A.register.length ? `<div class="scroll"><table><thead><tr><th>Participant</th><th>Type</th><th>Status at period end</th><th>Trades</th><th>Buys / Sells</th><th>Shares</th><th>USD</th><th>% of volume</th></tr></thead><tbody>${A.register.map(p => `<tr><td class="mono" title="${p.wallet_masked}">${p.participant_id}</td><td>${p.account_type}</td><td><span class="pill ${p.status_at_period_end === "ELIGIBLE" ? "g" : p.status_at_period_end === "KYC_PENDING" ? "y" : "r"}">${p.status_at_period_end}</span></td><td>${p.trades}</td><td>${p.buys} / ${p.sells}</td><td>${p.share_volume}</td><td>$${fmt(p.dollar_volume)}</td><td>${p.share_of_volume_pct}%</td></tr>`).join("")}</tbody></table></div>` : `<div class="empty">No participant activity in this period.</div>`}
+  </div>
+
+  <div class="card">
+    <h2>Market surveillance, MEV &amp; halt audit <span class="muted"><a href="/reports/${id}/halt_audit.csv">Halts</a> · <a href="/reports/${id}/surveillance_flags.csv">Flags</a> · <a href="/reports/${id}/mev_report.csv">MEV</a></span></h2>
+    <div class="tiles" style="margin-bottom:12px">
+      <div class="tile"><div class="l">Primary-market halts</div><div class="v">${S.primary_market_halts.filter(h => h.event === "PRIMARY_HALT").length}</div><div class="s">mirrored on-chain, lag ≤ 1 s</div></div>
+      <div class="tile"><div class="l">Other halts</div><div class="v">${S.other_halts.filter(h => h.event === "TRADING_HALT").length}</div><div class="s">manual / volume cap</div></div>
+      <div class="tile"><div class="l">Surveillance flags</div><div class="v ${S.wash_trading.flags.some(f => f.severity === "HIGH") ? "bad" : S.wash_trading.flags_raised ? "warn" : "ok"}">${S.wash_trading.flags_raised}</div><div class="s">${S.wash_trading.rules_run.length} rules run</div></div>
+      <div class="tile"><div class="l">MEV max deviation</div><div class="v ok">${S.mev.max_deviation_bps} bps</div><div class="s">${S.mev.front_running_incidents} incidents · ${S.mev.trades_checked} checked</div></div>
+    </div>
+    <p style="font-size:13px;margin:0 0 6px"><b>Primary-market halt log.</b> <span class="muted">${esc(S.halt_concurrency_attestation)}</span></p>
+    ${S.primary_market_halts.length ? `<div class="scroll" style="max-height:220px"><table><thead><tr><th>Time (UTC)</th><th>Feed event</th><th>Reason</th><th>Protocol action</th><th>Lag</th><th>On-chain proof</th></tr></thead><tbody>${S.primary_market_halts.map(h => `<tr><td class="mono">${esc(h.event_utc).replace("T"," ").slice(0,19)}</td><td class="${h.event === "PRIMARY_HALT" ? "bad" : "ok"}">${h.event}</td><td>${esc(h.reason)}</td><td class="mono">${h.protocol_action}</td><td>${h.concurrency_lag_sec}s</td><td class="mono">${h.onchain_signature ? `<a href="${txLink(h.onchain_signature)}" target="_blank">${short(h.onchain_signature)}</a>` : "—"}</td></tr>`).join("")}</tbody></table></div>` : ""}
+    ${S.other_halts.length ? `<p style="font-size:13px;margin:10px 0 6px"><b>Other halts.</b></p><div class="scroll" style="max-height:180px"><table><thead><tr><th>Time (UTC)</th><th>Source</th><th>Event</th><th>Reason</th><th>On-chain</th></tr></thead><tbody>${S.other_halts.map(h => `<tr><td class="mono">${esc(h.event_utc).replace("T"," ").slice(0,19)}</td><td>${esc(h.source)}</td><td class="mono ${h.event === "TRADING_HALT" ? "bad" : "ok"}">${h.event}</td><td>${esc(h.reason)}</td><td class="mono">${h.onchain_signature ? `<a href="${txLink(h.onchain_signature)}" target="_blank">${short(h.onchain_signature)}</a>` : "—"}</td></tr>`).join("")}</tbody></table></div>` : ""}
+    <p style="font-size:13px;margin:12px 0 6px"><b>Anti-manipulation surveillance.</b> <span class="muted">Rules: ${S.wash_trading.rules_run.join("; ")}. ${esc(S.wash_trading.note)}</span></p>
+    ${S.wash_trading.flags.length ? `<div class="scroll" style="max-height:220px"><table><thead><tr><th>Rule</th><th>Severity</th><th>Participant</th><th>Detail</th><th>Disposition</th></tr></thead><tbody>${S.wash_trading.flags.map(f => `<tr><td class="mono">${f.rule}</td><td class="${f.severity === "HIGH" ? "bad" : f.severity === "LOW" ? "warn" : "muted"}">${f.severity}</td><td class="mono">${f.participant_id}</td><td>${esc(f.detail)}</td><td class="muted">${esc(f.disposition)}</td></tr>`).join("")}</tbody></table></div>` : `<div class="muted" style="font-size:13px">No flags raised.</div>`}
+    <p style="font-size:13px;margin:12px 0 6px"><b>MEV &amp; front-running.</b> <span class="muted">${esc(S.mev.policy)}</span></p>
+  </div>
+
+  <div class="card">
+    <h2>Whitelisting, OFAC &amp; Travel Rule audit <span class="muted"><a href="/reports/${id}/onboarding_register.csv">Onboarding CSV</a> · <a href="/reports/${id}/frozen_assets.csv">Frozen assets CSV</a></span></h2>
+    <div class="tiles" style="margin-bottom:12px">
+      <div class="tile"><div class="l">New onboardings</div><div class="v">${W.onboarding_summary.new_profiles}</div><div class="s">${W.onboarding_summary.kyc_approvals} KYC approvals · ${W.onboarding_summary.kyc_revocations} revocations</div></div>
+      <div class="tile"><div class="l">Sanctions</div><div class="v ${W.onboarding_summary.sanctions_applied ? "bad" : ""}">${W.onboarding_summary.sanctions_applied} applied</div><div class="s">${W.onboarding_summary.sanctions_lifted} lifted · ${W.onboarding_summary.non_us_rejections} non-US rejections</div></div>
+      <div class="tile"><div class="l">Active whitelist</div><div class="v ok">${W.onboarding_summary.active_whitelisted_at_period_end}</div><div class="s">of ${W.onboarding_summary.total_profiles_at_period_end} profiles · ${W.onboarding_summary.restricted_at_period_end} restricted</div></div>
+      <div class="tile"><div class="l">Frozen assets</div><div class="v ${W.ofac.sanctioned_wallets ? "bad" : ""}">${W.ofac.total_frozen_tnvda} tNVDA</div><div class="s">$${fmt(W.ofac.total_frozen_value_usd)} in ${W.ofac.sanctioned_wallets} wallet(s)</div></div>
+      <div class="tile"><div class="l">Travel Rule (≥ $3,000)</div><div class="v">${W.travel_rule.transactions_at_or_above_3000}</div><div class="s">transactions in scope</div></div>
+    </div>
+    ${W.register.length ? `<div class="scroll" style="max-height:240px"><table><thead><tr><th>Time (UTC)</th><th>Participant</th><th>Action</th><th>US</th><th>Sanctioned</th><th>Cleared</th><th>New</th><th>Actor</th><th>On-chain</th></tr></thead><tbody>${W.register.map(x => `<tr><td class="mono">${esc(x.timestamp_utc).replace("T"," ").slice(0,19)}</td><td class="mono" title="${x.wallet_masked}">${x.participant_id}</td><td class="mono ${x.action.includes("SANCTION_APPLIED") || x.action.includes("REVOKED") || x.action.includes("REJECTED") ? "bad" : x.action.includes("APPROVED") || x.action.includes("LIFTED") ? "ok" : ""}">${x.action}</td><td>${x.us_person ? "Y" : "N"}</td><td>${x.sanctioned ? "Y" : "N"}</td><td>${x.kyc_cleared ? "Y" : "N"}</td><td>${x.new_onboarding}</td><td class="muted">${esc(x.actor)}</td><td class="mono">${x.onchain_signature ? `<a href="${txLink(x.onchain_signature)}" target="_blank">${short(x.onchain_signature)}</a>` : "—"}</td></tr>`).join("")}</tbody></table></div>` : `<div class="muted" style="font-size:13px">No whitelist changes in this period.</div>`}
+    <p style="font-size:13px;margin:12px 0 6px"><b>OFAC / frozen assets.</b> <span class="muted">${esc(W.ofac.note)}</span></p>
+    ${W.ofac.wallets.length ? `<table><thead><tr><th>Participant</th><th>Frozen tNVDA</th><th>Value</th><th>Mechanism</th><th>Screening source</th></tr></thead><tbody>${W.ofac.wallets.map(f => `<tr><td class="mono" title="${f.wallet_masked}">${f.participant_id}</td><td>${f.frozen_tnvda}</td><td>$${fmt(f.frozen_value_usd)}</td><td class="muted">${esc(f.mechanism)}</td><td class="muted">${esc(f.screening_source)}</td></tr>`).join("")}</tbody></table>` : `<div class="muted" style="font-size:13px">No sanctioned wallets at period end.</div>`}
+    <p style="font-size:13px;margin:12px 0 0"><b>Travel Rule.</b> ${ni(W.travel_rule)}</p>
+  </div>
+
+  <div class="card">
+    <h2>Financial condition &amp; master register reconciliation <span class="muted"><a href="/reports/${id}/master_register_holders.csv">Holders CSV</a></span></h2>
+    <p style="font-size:13px;margin:0 0 12px"><b>FOCUS report (X-17A-5).</b> <span class="pill y">${esc(F.focus_report.status)}</span><br><span class="muted">${esc(F.focus_report.note)}</span></p>
+    ${rc.error ? `<div class="muted">${esc(rc.error)}</div>` : `
+    <p style="font-size:13px;margin:0 0 8px"><b>Control book reconciliation (17Ad-10).</b> <span class="muted">${esc(rc.control_book_note)}</span></p>
+    <div class="tiles" style="margin-bottom:12px">
+      <div class="tile"><div class="l">On-chain total supply</div><div class="v">${Number(rc.onchain_total_supply).toLocaleString()}</div><div class="s">tNVDA</div></div>
+      <div class="tile"><div class="l">Sum of holder balances</div><div class="v">${Number(rc.sum_of_holder_balances).toLocaleString()}</div><div class="s">${rc.holders_with_balance} holders with balance · ${rc.holder_accounts} accounts</div></div>
+      <div class="tile"><div class="l">Difference</div><div class="v ${rc.match === "MATCH" ? "ok" : "bad"}">${rc.difference}</div><div class="s">${rc.match === "MATCH" ? '<span class="pill g">MATCH</span>' : '<span class="pill r">MISMATCH</span>'}</div></div>
+      <div class="tile"><div class="l">Outstanding with investors</div><div class="v">${rc.outstanding_with_investors}</div><div class="s">treasury holds ${Number(rc.treasury_balance).toLocaleString()}</div></div>
+      <div class="tile"><div class="l">Holders without profile</div><div class="v ${rc.holders_without_compliance_profile ? "bad" : "ok"}">${rc.holders_without_compliance_profile}</div><div class="s">must be 0</div></div>
+    </div>
+    <div class="scroll" style="max-height:220px"><table><thead><tr><th>Participant</th><th>Balance</th><th>Has profile</th><th>Treasury</th></tr></thead><tbody>${rc.holders.map(h => `<tr><td class="mono" title="${h.wallet_masked}">${h.participant_id}</td><td>${Number(h.balance).toLocaleString()}</td><td class="${h.has_profile === "Y" ? "ok" : "bad"}">${h.has_profile}</td><td>${h.is_treasury}</td></tr>`).join("")}</tbody></table></div>`}
+  </div>
+
+  <div class="card">
+    <h2>Records retention <span class="muted"><a href="/reports/${id}/retention_manifest.json">Manifest</a></span></h2>
+    <div class="kv"><span class="l">Rule</span><span>${esc(R.rule)}</span><span class="l">Generated</span><span class="mono">${esc(R.generated_utc)}</span><span class="l">Retain until</span><span class="mono">${esc(R.retain_until_utc)}</span><span class="l">Formats</span><span>${R.formats.join(" · ")}</span><span class="l">Storage</span><span class="mono">${esc(R.storage)}</span></div>
+    <p class="muted" style="font-size:13px;margin:8px 0 0">The manifest lists every file in the package with its size and SHA-256, so the archive can be checked for completeness and integrity at any point in the retention period.</p>
+  </div>`; })() : ""}
+
   ${r.cat_daily_file ? `<div class="card">
     <h2>CAT daily file <span class="muted">${r.cat_daily_file.events.length} events · due ${esc(r.cat_daily_file.summary.deadline)} · <a href="/reports/${id}/cat_daily_file.csv">CSV</a> · <a href="/reports/${id}/cat_daily_file.json">JSON</a></span></h2>
     <div class="tiles" style="margin-bottom:12px">

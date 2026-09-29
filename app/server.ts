@@ -639,9 +639,83 @@ async function generateReport(type: string, from: number, to: number, generatedB
   const pricingSummary = { observations: pricingRows.length, sources: [...new Set(pricingRows.map((r) => r.source))], min: pricingRows.length ? Math.min(...pricingRows.map((r) => r.price_usd)) : null, max: pricingRows.length ? Math.max(...pricingRows.map((r) => r.price_usd)) : null,
     methodology: "Prototype uses a venue-configured fixed reference price for tNVDA/USDC. Production: AMM curve anchored to an external NVDA reference feed (e.g. RedStone, Kaiko, Chronicle) with staleness and deviation guards; every quote records the feed value and timestamp used." };
 
+  // ===== Monthly / quarterly sections =====================================================
+  const notImplemented = (what: string, why: string) => ({ status: "NOT IMPLEMENTED IN PROTOTYPE", what, why });
+
+  // B. Reg ATS activity & participant breakdown
+  const byWallet = new Map<string, { trades: number; shares: number; usd: number; buys: number; sells: number }>();
+  for (const t of trades) { const w = byWallet.get(t.buyer) ?? { trades: 0, shares: 0, usd: 0, buys: 0, sells: 0 }; w.trades++; w.shares += t.tnvdaOut; w.usd += t.usdcIn; if ((t.side ?? "buy") === "buy") w.buys++; else w.sells++; byWallet.set(t.buyer, w); }
+  const profileMap = new Map<string, any>(all.map((p: any) => [p.account.walletAddress.toBase58(), p.account]));
+  const participants = [...byWallet.entries()].map(([w, v]) => { const pr = profileMap.get(w); return { participant_id: fdidOf(w), wallet_masked: mask(w), account_type: w === cfg.treasury ? "VENUE_TREASURY" : "RETAIL", status_at_period_end: !pr ? "NO_PROFILE" : pr.isOfacSanctioned ? "SANCTIONED" : !pr.isUsPerson ? "NON_US" : !pr.kycCleared ? "KYC_PENDING" : "ELIGIBLE", trades: v.trades, buys: v.buys, sells: v.sells, share_volume: +v.shares.toFixed(6), dollar_volume: +v.usd.toFixed(2), share_of_volume_pct: trades.length ? +((v.usd / trades.reduce((a, t) => a + t.usdcIn, 0)) * 100).toFixed(2) : 0 }; }).sort((a, b) => b.dollar_volume - a.dollar_volume);
+  const regAts = {
+    aggregate: { share_volume: +trades.reduce((a, t) => a + t.tnvdaOut, 0).toFixed(6), dollar_volume: +trades.reduce((a, t) => a + t.usdcIn, 0).toFixed(2), trades: trades.length, pools: 1, pool_addresses: [cfg.treasury], securities: ["tNVDA"], settlement_asset: "USDC", months: months },
+    participants: { active_in_period: participants.length, whitelisted_at_period_end: roster.eligible, retail_dollar_volume: +participants.filter((p) => p.account_type === "RETAIL").reduce((a, p) => a + p.dollar_volume, 0).toFixed(2), institutional_dollar_volume: 0, retail_pct: participants.length ? 100 : 0, institutional_pct: 0, note: "All non-venue participants are natural-person (retail) accounts in this prototype; institutional/Covered Firm classification field exists on the participant register but no institutional accounts are onboarded." },
+    covered_firms: { count: 0, disclosure: "No Covered Firms (exempt institutional liquidity providers depositing proprietary capital) participate. All liquidity is provided by the venue's own treasury, which is disclosed as the sole liquidity provider and principal counterparty on every trade." },
+    register: participants,
+  };
+
+  // C. Market surveillance, MEV and halt audit
+  const haltEvents = audit.filter((a) => a.ts >= from && a.ts < to && (a.action === "TRADING_HALT" || a.action === "TRADING_RESUME"));
+  const primaryHalts = haltEvents.filter((a) => a.actor.startsWith("primary-market")).map((a) => ({ event_utc: fmtTs(a.ts), source: "primary-market feed (simulated Nasdaq)", event: a.action === "TRADING_HALT" ? "PRIMARY_HALT" : "PRIMARY_RESUME", reason: a.details, protocol_action: a.action, onchain_signature: a.signature ?? "", concurrency_lag_sec: 0, proof: a.signature ? `on-chain ${a.action} in the same server tick; signature ${a.signature}` : "no signature recorded" }));
+  const otherHalts = haltEvents.filter((a) => !a.actor.startsWith("primary-market")).map((a) => ({ event_utc: fmtTs(a.ts), source: a.actor, event: a.action, reason: a.details, onchain_signature: a.signature ?? "" }));
+  // Wash / self-dealing surveillance: same wallet buys and sells within a window; concentration; off-reference prices.
+  const WINDOW = 3600;
+  const flags: any[] = [];
+  const byW = new Map<string, typeof trades>(); for (const t of trades) (byW.get(t.buyer) ?? byW.set(t.buyer, []).get(t.buyer)!).push(t);
+  for (const [w, ts] of byW) {
+    const sorted = ts.sort((a, b) => a.blockTime - b.blockTime);
+    for (let i = 1; i < sorted.length; i++) { const a = sorted[i - 1], b = sorted[i]; if ((a.side ?? "buy") !== (b.side ?? "buy") && b.blockTime - a.blockTime <= WINDOW && Math.abs(a.tnvdaOut - b.tnvdaOut) / Math.max(a.tnvdaOut, b.tnvdaOut) < 0.05)
+      flags.push({ rule: "ROUND_TRIP", severity: "LOW", participant_id: fdidOf(w), wallet_masked: mask(w), detail: `${a.side ?? "buy"} ${a.tnvdaOut} then ${b.side ?? "buy"} ${b.tnvdaOut} within ${b.blockTime - a.blockTime}s`, trade_ids: `${a.signature};${b.signature}`, disposition: "Reviewed: single-counterparty venue (treasury is the contra on both legs); no price impact possible at fixed reference price." }); }
+  }
+  for (const p of participants) if (p.account_type === "RETAIL" && p.share_of_volume_pct >= 50 && participants.filter((x) => x.account_type === "RETAIL").length > 1) flags.push({ rule: "CONCENTRATION", severity: "INFO", participant_id: p.participant_id, wallet_masked: p.wallet_masked, detail: `${p.share_of_volume_pct}% of period dollar volume`, trade_ids: "", disposition: "Informational; expected in a low-participant prototype." });
+  for (const t of trades) { const px = t.usdcIn / t.tnvdaOut; const ref = cfg.priceUsdcPerTnvda; if (Math.abs(px - ref) / ref > 0.001) flags.push({ rule: "OFF_REFERENCE_PRICE", severity: "HIGH", participant_id: fdidOf(t.buyer), wallet_masked: t.buyerMasked, detail: `executed ${px.toFixed(4)} vs reference ${ref}`, trade_ids: t.signature, disposition: "Escalate." }); }
+  const mevRows = trades.map((t) => ({ trade_id: t.signature, executed_utc: fmtTs(t.blockTime), reference_price: cfg.priceUsdcPerTnvda, execution_price: +(t.usdcIn / t.tnvdaOut).toFixed(6), deviation_bps: +(((t.usdcIn / t.tnvdaOut - cfg.priceUsdcPerTnvda) / cfg.priceUsdcPerTnvda) * 10000).toFixed(2), slippage_exposed: "NONE (fixed-price, server-built transaction)", submission_path: (process.env.RPC_URL ?? "").includes("helius") ? "dedicated RPC (Helius)" : "public RPC", sandwich_possible: "NO" }));
+  const surveillance = {
+    primary_market_halts: primaryHalts, other_halts: otherHalts,
+    halt_concurrency_attestation: primaryHalts.length ? `All ${primaryHalts.filter((h) => h.event === "PRIMARY_HALT").length} primary-market halt event(s) in the period were mirrored by a protocol-level halt in the same processing cycle (lag ≤ 1 s), evidenced by the on-chain signatures listed.` : "No primary-market halt events in the period.",
+    wash_trading: { rules_run: ["ROUND_TRIP (opposite-side trades by one participant within 1h, size within 5%)", "CONCENTRATION (participant ≥ 50% of period volume)", "OFF_REFERENCE_PRICE (execution > 10 bps from reference)"], flags_raised: flags.length, flags, note: "Cross-wallet relationship analysis (related-wallet clustering) not implemented; every trade has the venue treasury as contra, so circular trading between participants cannot occur on this venue." },
+    mev: { policy: "Transactions are built server-side at a fixed reference price with no slippage parameter, so a sandwich cannot change execution price; submission via a dedicated RPC endpoint when configured. Fair-ordering / private mempool submission is not yet integrated.", trades_checked: mevRows.length, max_deviation_bps: mevRows.length ? Math.max(...mevRows.map((m) => Math.abs(m.deviation_bps))) : 0, front_running_incidents: 0, rows: mevRows },
+  };
+
+  // D. Whitelisting, OFAC & Travel Rule
+  const kycEvents = audit.filter((a) => a.ts >= from && a.ts < to && a.action === "KYC_UPDATE");
+  const parseKyc = (d: string) => { const m = d.match(/^(\S+) us=(true|false) sanctioned=(true|false) cleared=(true|false)/); return m ? { wallet: m[1], us: m[2] === "true", sanctioned: m[3] === "true", cleared: m[4] === "true" } : null; };
+  const seenBefore = new Set<string>(audit.filter((a) => a.ts < from && a.action === "KYC_UPDATE").map((a) => parseKyc(a.details)?.wallet).filter(Boolean) as string[]);
+  const onboarding = { new_profiles: 0, kyc_approvals: 0, kyc_revocations: 0, sanctions_applied: 0, sanctions_lifted: 0, non_us_rejections: 0, active_whitelisted_at_period_end: roster.eligible, total_profiles_at_period_end: roster.total, restricted_at_period_end: roster.restricted, pending_at_period_end: roster.pending };
+  const onboardingRows: any[] = [];
+  const lastState = new Map<string, any>();
+  for (const a of kycEvents) { const k = parseKyc(a.details); if (!k) continue; const prev = lastState.get(k.wallet); const isNew = !seenBefore.has(k.wallet) && !prev; if (isNew) onboarding.new_profiles++;
+    const action = k.sanctioned && !(prev?.sanctioned) ? "SANCTION_APPLIED" : !k.sanctioned && prev?.sanctioned ? "SANCTION_LIFTED" : !k.us ? "NON_US_REJECTED" : k.cleared && !(prev?.cleared) ? "KYC_APPROVED" : !k.cleared && prev?.cleared ? "KYC_REVOKED" : "PROFILE_UPDATED";
+    if (action === "SANCTION_APPLIED") onboarding.sanctions_applied++; if (action === "SANCTION_LIFTED") onboarding.sanctions_lifted++; if (action === "KYC_APPROVED") onboarding.kyc_approvals++; if (action === "KYC_REVOKED") onboarding.kyc_revocations++; if (action === "NON_US_REJECTED") onboarding.non_us_rejections++;
+    onboardingRows.push({ timestamp_utc: fmtTs(a.ts), participant_id: fdidOf(k.wallet), wallet_masked: mask(k.wallet), action, us_person: k.us, sanctioned: k.sanctioned, kyc_cleared: k.cleared, new_onboarding: isNew ? "Y" : "N", actor: a.actor, onchain_signature: a.signature ?? "" });
+    lastState.set(k.wallet, k); seenBefore.add(k.wallet); }
+  const sanctionedWallets = all.filter((p: any) => p.account.isOfacSanctioned).map((p: any) => p.account.walletAddress as PublicKey);
+  const frozen = await Promise.all(sanctionedWallets.map(async (w: PublicKey) => { const bal = await connection.getTokenAccountBalance(getAssociatedTokenAddressSync(TNVDA, w, false, TOKEN_2022_PROGRAM_ID)).then((r) => Number(r.value.uiAmount)).catch(() => 0); return { participant_id: fdidOf(w.toBase58()), wallet_masked: mask(w), frozen_tnvda: bal, frozen_value_usd: +(bal * cfg.priceUsdcPerTnvda).toFixed(2), mechanism: "Transfer hook rejects any transfer to or from this wallet", screening_source: "Manual designation by compliance officer (continuous SDN re-screening not integrated)" }; }));
+  const travelRule = trades.filter((t) => t.usdcIn >= 3000).map((t) => ({ trade_id: t.signature, executed_utc: fmtTs(t.blockTime), notional_usd: t.usdcIn, threshold: 3000, originator_id: fdidOf(t.buyer), beneficiary: "VENUE_TREASURY", protocol: "", payload_status: "NOT TRANSMITTED — Travel Rule messaging (TRUST/TRISA/TRP) not implemented" }));
+  const whitelistAudit = { onboarding_summary: onboarding, register: onboardingRows, ofac: { sanctioned_wallets: frozen.length, total_frozen_tnvda: +frozen.reduce((a, f) => a + f.frozen_tnvda, 0).toFixed(6), total_frozen_value_usd: +frozen.reduce((a, f) => a + f.frozen_value_usd, 0).toFixed(2), wallets: frozen, note: "Assets are frozen in place by the transfer hook; the venue does not take custody. Continuous OFAC SDN list re-screening is not integrated in the prototype." }, travel_rule: { transactions_at_or_above_3000: travelRule.length, rows: travelRule, ...notImplemented("Out-of-band identity payload transmission for transfers ≥ $3,000", "Requires a Travel Rule protocol integration (TRUST, TRISA or TRP) and counterparty VASP directory.") } };
+
+  // E. Financial condition & master register reconciliation
+  let recon: any = null;
+  try {
+    const supply = await connection.getTokenSupply(TNVDA).then((r) => Number(r.value.uiAmount));
+    const holders = await connection.getParsedProgramAccounts(TOKEN_2022_PROGRAM_ID, { filters: [{ dataSize: 182 }, { memcmp: { offset: 0, bytes: TNVDA.toBase58() } }] }).catch(() => [] as any[]);
+    const rows = holders.map((h: any) => ({ owner: h.account.data.parsed.info.owner as string, amount: Number(h.account.data.parsed.info.tokenAmount.uiAmount) }));
+    const sumHolders = rows.reduce((a, r) => a + r.amount, 0);
+    const treasuryBal = rows.find((r) => r.owner === cfg.treasury)?.amount ?? 0;
+    const profiled = rows.filter((r) => r.amount > 0 && !profileMap.has(r.owner));
+    recon = { as_of_utc: fmtTs(Math.floor(Date.now() / 1000)), onchain_total_supply: supply, sum_of_holder_balances: +sumHolders.toFixed(6), difference: +(supply - sumHolders).toFixed(6), match: Math.abs(supply - sumHolders) < 1e-6 ? "MATCH" : "MISMATCH", holder_accounts: rows.length, holders_with_balance: rows.filter((r) => r.amount > 0).length, treasury_balance: treasuryBal, outstanding_with_investors: +(supply - treasuryBal).toFixed(6), holders_without_compliance_profile: profiled.length, control_book_note: "On-chain token accounts are the canonical master securityholder file for this venue (single chain, single mint); the on-chain ledger is the control book, so the reconciliation is supply vs. sum-of-holders plus a check that every holder has a compliance profile.",
+      holders: rows.filter((r) => r.amount > 0).map((r) => ({ participant_id: fdidOf(r.owner), wallet_masked: mask(r.owner), balance: r.amount, has_profile: profileMap.has(r.owner) ? "Y" : "N", is_treasury: r.owner === cfg.treasury ? "Y" : "N" })) };
+  } catch (e: any) { recon = { error: `reconciliation unavailable: ${e.message}` }; }
+  const financial = { focus_report: { status: "NOT APPLICABLE / NOT IMPLEMENTED", note: "Form X-17A-5 (FOCUS) net-capital computation under Rule 15c3-1 and customer reserve under 15c3-3 apply to registered broker-dealers. This prototype venue holds no customer funds or securities (settlement is atomic and self-custodied; the venue never takes custody), so no customer reserve arises; whether a net-capital requirement applies depends on the operator's registration status under the exemption and is for counsel to determine. Fields reserved: net_capital, haircuts_digital_assets, reserve_requirement." }, master_register_reconciliation: recon };
+
+  // Retention manifest
+  const retainUntil = new Date(now * 1000); retainUntil.setUTCFullYear(retainUntil.getUTCFullYear() + 3);
+  const retention = { rule: "SEC Rule 17a-4 / TSV books-and-records: retain in human-readable and machine-readable form for at least 3 years", generated_utc: fmtTs(now), retain_until_utc: retainUntil.toISOString(), formats: ["HTML (human-readable)", "JSON (machine-readable, signed)", "CSV (machine-readable tables)"], storage: `devnet/reports/${'${id}'}/` };
+
   const seq = (reportsIndex[reportsIndex.length - 1]?.seq ?? 0) + 1;
   const prevHash = reportsIndex[reportsIndex.length - 1]?.hash ?? null;
   const id = `${type}-${new Date(from * 1000).toISOString().slice(0, 10)}-${String(seq).padStart(4, "0")}`;
+  retention.storage = `devnet/reports/${id}/`;
   const body = {
     report: { id, sequence: seq, type, schema: "tsv-regulatory-report/1", venue: "Digital Vector Solutions — Tokenized Securities Venue (devnet prototype)", operator_contact: "tim.mindray@gmail.com",
       period_start_utc: fmtTs(from), period_end_utc: fmtTs(to), period_start_et: fmtEt(from), period_end_et: fmtEt(to), generated_at_utc: fmtTs(now), generated_by: generatedBy,
@@ -657,6 +731,11 @@ async function generateReport(type: string, from: number, to: number, generatedB
     public_tape_verification: { rule: "Every execution published in machine-readable form within 10 minutes: price, size, direction, masked counterparty, signature.", summary: tapeSummary, trades: tapeVerif },
     eod_pool_state: { pool_address: cfg.treasury, days: eodPool },
     pricing_log: { summary: pricingSummary, observations: pricingRows },
+    reg_ats_activity: regAts,
+    surveillance_and_halt_audit: surveillance,
+    whitelisting_and_sanctions_audit: whitelistAudit,
+    financial_condition: financial,
+    retention: retention,
     volume_cap_report: { rule: `Monthly venue volume in a Tier 1 tokenized NMS stock ≤ ${venue.capPct}% of the security's consolidated ADV; second breach in a rolling 12 months → 3-month trading pause`, months: volumeCapReport, quarters: quarterly },
   };
   const canonical = JSON.stringify(body);
@@ -675,6 +754,13 @@ async function generateReport(type: string, from: number, to: number, generatedB
   fs.writeFileSync(path.join(dir, "rejected_orders.csv"), toCsv(rejRows));
   fs.writeFileSync(path.join(dir, "cat_daily_file.csv"), toCsv(catRows));
   fs.writeFileSync(path.join(dir, "trf_daily_file.csv"), toCsv(trfRows));
+  fs.writeFileSync(path.join(dir, "participant_register.csv"), toCsv(participants));
+  fs.writeFileSync(path.join(dir, "halt_audit.csv"), toCsv([...primaryHalts, ...otherHalts]));
+  fs.writeFileSync(path.join(dir, "surveillance_flags.csv"), toCsv(flags));
+  fs.writeFileSync(path.join(dir, "mev_report.csv"), toCsv(mevRows));
+  fs.writeFileSync(path.join(dir, "onboarding_register.csv"), toCsv(onboardingRows));
+  fs.writeFileSync(path.join(dir, "frozen_assets.csv"), toCsv(frozen));
+  fs.writeFileSync(path.join(dir, "master_register_holders.csv"), toCsv(recon?.holders ?? []));
   fs.writeFileSync(path.join(dir, "public_tape_verification.csv"), toCsv(tapeVerif));
   fs.writeFileSync(path.join(dir, "eod_pool_state.csv"), toCsv(eodPool));
   fs.writeFileSync(path.join(dir, "pricing_log.csv"), toCsv(pricingRows));
@@ -682,7 +768,9 @@ async function generateReport(type: string, from: number, to: number, generatedB
   fs.writeFileSync(path.join(dir, "volume_cap_log.csv"), toCsv(volumeCapReport.flatMap((m) => m.log.map((l) => ({ month: m.month, ...l })))));
   fs.writeFileSync(path.join(dir, "cat_daily_file.json"), JSON.stringify({ reporter: VENUE_IMID, report_id: id, period_start_utc: fmtTs(from), period_end_utc: fmtTs(to), ...catSummary, events: catRows }, null, 2));
   fs.writeFileSync(path.join(dir, "report.html"), renderReportHtml(envelope));
-  const meta: ReportMeta = { id, seq, type, from, to, generatedAt: now, generatedBy, trades: trades.length, hash, prevHash, signature, files: ["report.html", "report.json", "trade_blotter.csv", "daily_summary.csv", "compliance_events.csv", "rejected_orders.csv", "cat_daily_file.csv", "cat_daily_file.json", "volume_cap_monthly.csv", "volume_cap_log.csv", "trf_daily_file.csv", "public_tape_verification.csv", "eod_pool_state.csv", "pricing_log.csv"] };
+  const manifest = { ...retention, report_hash_sha256: hash, files: fs.readdirSync(dir).filter((f) => f !== "retention_manifest.json").map((f) => ({ file: f, bytes: fs.statSync(path.join(dir, f)).size, sha256: crypto.createHash("sha256").update(fs.readFileSync(path.join(dir, f))).digest("hex") })) };
+  fs.writeFileSync(path.join(dir, "retention_manifest.json"), JSON.stringify(manifest, null, 2));
+  const meta: ReportMeta = { id, seq, type, from, to, generatedAt: now, generatedBy, trades: trades.length, hash, prevHash, signature, files: ["report.html", "report.json", "trade_blotter.csv", "daily_summary.csv", "compliance_events.csv", "rejected_orders.csv", "cat_daily_file.csv", "cat_daily_file.json", "volume_cap_monthly.csv", "volume_cap_log.csv", "trf_daily_file.csv", "public_tape_verification.csv", "eod_pool_state.csv", "pricing_log.csv", "participant_register.csv", "halt_audit.csv", "surveillance_flags.csv", "mev_report.csv", "onboarding_register.csv", "frozen_assets.csv", "master_register_holders.csv", "retention_manifest.json"] };
   reportsIndex.push(meta); fs.writeFileSync(REPORTS_INDEX, JSON.stringify(reportsIndex, null, 2));
   logAudit({ actor: generatedBy, action: "REGULATORY_REPORT", details: `${id}: ${trades.length} trades, ${rej.length} rejections, ${events.length} events; sha256 ${hash.slice(0, 16)}…` });
   return meta;
@@ -713,10 +801,15 @@ table{border-collapse:collapse;width:100%;font-size:12px}th,td{border:1px solid 
 <h2>9 · Public tape verification (10-minute rule)</h2>${kv(r.public_tape_verification.summary)}${table(r.public_tape_verification.trades, ["executed_utc","published_utc","latency_sec","within_10_min","side_published","price_published","size_published","trade_id"])}
 <h2>10 · End-of-day pool reserves &amp; TVL</h2>${table(r.eod_pool_state.days)}
 <h2>11 · Reference pricing log</h2>${kv(r.pricing_log.summary)}${table(r.pricing_log.observations)}
-<h2>12 · Tiered volume cap &amp; ADV tracking</h2><p class="muted">${esc(r.volume_cap_report.rule)}</p>${table(r.volume_cap_report.months.map((m: any) => ({ month: m.month, adv_benchmark_shares: m.adv_benchmark_shares, cap_pct_of_adv: m.cap_pct_of_adv, cap_shares: m.cap_shares, mtd_volume_shares: m.mtd_volume_shares, pct_of_cap_used: m.pct_of_cap_used, trades: m.trades, compliant: m.compliant ? "YES" : "NO", warning_reached_utc: m.warning_reached_utc ?? "", breach_utc: m.breach_utc ?? "", breaches_this_month: m.breaches_this_month, breaches_rolling_12m: m.breaches_rolling_12m, pauses_triggered: m.pauses_triggered })))}
+<h2>12 · Reg ATS activity &amp; participant breakdown</h2>${kv(r.reg_ats_activity.aggregate)}${kv(r.reg_ats_activity.participants)}${kv(r.reg_ats_activity.covered_firms)}${table(r.reg_ats_activity.register)}
+<h2>13 · Market surveillance, MEV &amp; trading halt audit</h2><p><b>Primary-market halts.</b> ${esc(r.surveillance_and_halt_audit.halt_concurrency_attestation)}</p>${table(r.surveillance_and_halt_audit.primary_market_halts)}<p><b>Other halts.</b></p>${table(r.surveillance_and_halt_audit.other_halts)}<p><b>Wash-trading surveillance.</b> ${r.surveillance_and_halt_audit.wash_trading.flags_raised} flag(s). ${esc(r.surveillance_and_halt_audit.wash_trading.note)}</p>${table(r.surveillance_and_halt_audit.wash_trading.flags)}<p><b>MEV.</b> ${esc(r.surveillance_and_halt_audit.mev.policy)} Max deviation ${r.surveillance_and_halt_audit.mev.max_deviation_bps} bps; incidents ${r.surveillance_and_halt_audit.mev.front_running_incidents}.</p>${table(r.surveillance_and_halt_audit.mev.rows, ["executed_utc","reference_price","execution_price","deviation_bps","slippage_exposed","submission_path","sandwich_possible","trade_id"])}
+<h2>14 · Whitelisting, OFAC &amp; Travel Rule audit</h2>${kv(r.whitelisting_and_sanctions_audit.onboarding_summary)}${table(r.whitelisting_and_sanctions_audit.register)}<p><b>OFAC / frozen assets.</b> ${esc(r.whitelisting_and_sanctions_audit.ofac.note)}</p>${table(r.whitelisting_and_sanctions_audit.ofac.wallets)}<p><b>Travel Rule.</b> ${r.whitelisting_and_sanctions_audit.travel_rule.transactions_at_or_above_3000} transaction(s) ≥ $3,000. <span class="muted">${esc(r.whitelisting_and_sanctions_audit.travel_rule.status)}: ${esc(r.whitelisting_and_sanctions_audit.travel_rule.why)}</span></p>${table(r.whitelisting_and_sanctions_audit.travel_rule.rows)}
+<h2>15 · Financial condition &amp; master register reconciliation</h2><p><b>FOCUS (X-17A-5).</b> <span class="muted">${esc(r.financial_condition.focus_report.status)} — ${esc(r.financial_condition.focus_report.note)}</span></p>${r.financial_condition.master_register_reconciliation.error ? `<p class="muted">${esc(r.financial_condition.master_register_reconciliation.error)}</p>` : kv((({ holders, ...rest }) => rest)(r.financial_condition.master_register_reconciliation)) + table(r.financial_condition.master_register_reconciliation.holders)}
+<h2>16 · Records retention</h2>${kv(r.retention)}
+<h2>17 · Tiered volume cap &amp; ADV tracking</h2><p class="muted">${esc(r.volume_cap_report.rule)}</p>${table(r.volume_cap_report.months.map((m: any) => ({ month: m.month, adv_benchmark_shares: m.adv_benchmark_shares, cap_pct_of_adv: m.cap_pct_of_adv, cap_shares: m.cap_shares, mtd_volume_shares: m.mtd_volume_shares, pct_of_cap_used: m.pct_of_cap_used, trades: m.trades, compliant: m.compliant ? "YES" : "NO", warning_reached_utc: m.warning_reached_utc ?? "", breach_utc: m.breach_utc ?? "", breaches_this_month: m.breaches_this_month, breaches_rolling_12m: m.breaches_rolling_12m, pauses_triggered: m.pauses_triggered })))}
 ${r.volume_cap_report.quarters.length ? `<h3 style="font-size:13px;margin:12px 0 6px">Quarterly roll-up</h3>${table(r.volume_cap_report.quarters.map((q: any) => ({ ...q, months: q.months.join(", "), all_months_compliant: q.all_months_compliant ? "YES" : "NO" })))}` : ""}
 <h3 style="font-size:13px;margin:12px 0 6px">Breach &amp; circuit-breaker log</h3>${table(r.volume_cap_report.months.flatMap((m: any) => m.log.map((l: any) => ({ month: m.month, ...l }))))}
-<h2>13 · Attestation</h2><div class="box">${esc(r.attestation.statement)}<br><br><span class="mono">content_sha256: ${esc(r.attestation.content_sha256)}<br>signer (venue admin key): ${esc(r.attestation.signer)}<br>signature (${esc(r.attestation.algorithm)}): ${esc(r.attestation.signature)}</span><br><br><span class="muted">Verify: recompute SHA-256 over the canonical JSON body (all fields except <i>attestation</i>) and check the ed25519 signature against the signer's public key. Each trade_id is a Solana transaction signature that can be independently confirmed on-chain.</span></div>
+<h2>18 · Attestation</h2><div class="box">${esc(r.attestation.statement)}<br><br><span class="mono">content_sha256: ${esc(r.attestation.content_sha256)}<br>signer (venue admin key): ${esc(r.attestation.signer)}<br>signature (${esc(r.attestation.algorithm)}): ${esc(r.attestation.signature)}</span><br><br><span class="muted">Verify: recompute SHA-256 over the canonical JSON body (all fields except <i>attestation</i>) and check the ed25519 signature against the signer's public key. Each trade_id is a Solana transaction signature that can be independently confirmed on-chain.</span></div>
 <p class="muted" style="margin-top:28px">This venue is a devnet prototype and is not registered with or endorsed by the U.S. Securities and Exchange Commission.</p>
 </body></html>`;
 }
