@@ -36,6 +36,13 @@
   .big { font-size:22px; font-weight:700; }
   #log { background:#070c16; border:1px solid var(--line); border-radius:10px; padding:12px; min-height:60px; max-height:200px; overflow:auto; white-space:pre-wrap; word-break:break-all; }
   .busy { opacity:.6; pointer-events:none; }
+  .grid2 { display:grid; grid-template-columns:minmax(0,1fr) minmax(0,1fr); gap:20px; }
+  @media (max-width:860px){ .grid2 { grid-template-columns:1fr; } }
+  .meter { height:14px; background:#0b1220; border:1px solid var(--line); border-radius:999px; overflow:hidden; margin:10px 0; }
+  .meter > div { height:100%; background:var(--ok); transition:width .4s; }
+  .meter.warn > div { background:var(--warn); } .meter.bad > div { background:var(--bad); }
+  .kv { display:grid; grid-template-columns:auto 1fr; gap:6px 14px; font-size:14px; }
+  input.small { width:160px; }
 </style>
 </head>
 <body>
@@ -52,6 +59,45 @@
     </div>
   </section>
 
+  <div class="grid2">
+    <section class="card">
+      <h2>Tier 1 volume cap · month to date</h2>
+      <div class="kv">
+        <span class="muted">Rule</span><span>Monthly venue volume ≤ <b id="capPct">—</b>% of NVDA consolidated ADV</span>
+        <span class="muted">NVDA ADV</span><span class="row"><input id="adv" class="small" type="number" min="1"> <span class="muted">shares</span> <button id="advBtn" class="secondary">Update</button></span>
+        <span class="muted">Cap</span><span id="capVal">—</span>
+        <span class="muted">MTD volume</span><span id="mtdVal">—</span>
+      </div>
+      <div id="meter" class="meter"><div style="width:0%"></div></div>
+      <div class="row"><span id="capBadge" class="badge">—</span><span id="breaches" class="muted"></span><button id="resetBreaches" class="secondary" style="margin-left:auto">Reset breaches</button></div>
+      <p class="muted" style="margin:10px 0 0">Monitored automatically from the trade tape. A breach halts trading on-chain and is recorded in the audit trail; a second breach requires a 3-month pause.</p>
+    </section>
+
+    <section class="card">
+      <h2>Primary exchange sync · Nasdaq: NVDA</h2>
+      <div class="kv">
+        <span class="muted">Primary market</span><span id="pmStatus" class="big">—</span>
+        <span class="muted">Reason</span><span id="pmReason" class="muted">—</span>
+      </div>
+      <div class="row" style="margin-top:12px">
+        <button id="pmLuld" class="danger">Simulate LULD pause</button>
+        <button id="pmMwcb" class="danger">Simulate circuit breaker</button>
+        <button id="pmResume" class="ok">Primary resumes</button>
+      </div>
+      <p class="muted" style="margin:10px 0 0">Simulated feed. A halt on the primary listing exchange must halt tNVDA concurrently; the on-chain halt these buttons trigger is real.</p>
+    </section>
+  </div>
+
+  <section class="card">
+    <h2>Listing · issuer notice</h2>
+    <div class="kv">
+      <span class="muted">Security</span><span id="lstSec">—</span>
+      <span class="muted">Issuer notice sent</span><span id="lstNotice">—</span>
+      <span class="muted">Objection window</span><span id="lstWindow">—</span>
+      <span class="muted">Status</span><span id="lstStatus" class="badge g">—</span>
+    </div>
+  </section>
+
   <section class="card">
     <h2>Investor wallets</h2>
     <div class="row" style="margin-bottom:14px">
@@ -64,6 +110,16 @@
       <thead><tr><th>Wallet</th><th>Status</th><th>US person</th><th>OFAC sanctioned</th><th>KYC cleared</th><th>Quick actions</th></tr></thead>
       <tbody id="rows"><tr><td colspan="6" class="muted">Loading…</td></tr></tbody>
     </table>
+    </div>
+  </section>
+
+  <section class="card">
+    <h2>Audit trail <span class="muted" style="text-transform:none;letter-spacing:0">(books &amp; records · <a href="/api/audit.csv" style="color:var(--accent)">CSV</a> · <a href="/api/audit" style="color:var(--accent)">JSON</a>)</span></h2>
+    <div style="overflow:auto; max-height:320px">
+      <table>
+        <thead><tr><th>Time (UTC)</th><th>Actor</th><th>Action</th><th>Details</th><th>Signature</th></tr></thead>
+        <tbody id="auditRows"><tr><td colspan="5" class="muted">No entries yet.</td></tr></tbody>
+      </table>
     </div>
   </section>
 
@@ -124,10 +180,56 @@ function render() {
   }).join("");
 }
 
-async function refresh() {
-  state = await api("/api/admin/state");
-  render();
+function renderVenue(v) {
+  const vc = v.volumeCap;
+  $("capPct").textContent = vc.capPct;
+  if (document.activeElement !== $("adv")) $("adv").value = vc.nvdaAdvShares;
+  $("capVal").textContent = `${vc.cap.toLocaleString()} tNVDA / month`;
+  $("mtdVal").textContent = `${vc.mtdVolume.toLocaleString(undefined,{maximumFractionDigits:6})} tNVDA (${vc.trades} trades, ${vc.month})`;
+  const pct = Math.min(100, vc.pct);
+  const m = $("meter"); m.className = "meter " + (vc.pct >= 100 ? "bad" : vc.pct >= 80 ? "warn" : "");
+  m.firstElementChild.style.width = pct + "%";
+  $("capBadge").textContent = vc.pct >= 100 ? `CAP BREACHED · ${vc.pct.toFixed(1)}%` : `${vc.pct.toFixed(2)}% of cap used`;
+  $("capBadge").className = "badge " + (vc.pct >= 100 ? "r" : vc.pct >= 80 ? "y" : "g");
+  $("breaches").textContent = `Breaches on record: ${vc.breaches.length}` + (vc.breaches.length ? ` (last ${new Date(vc.breaches[vc.breaches.length-1].at*1000).toISOString().slice(0,16).replace("T"," ")} UTC)` : "");
+  const pm = v.primaryMarket;
+  $("pmStatus").textContent = pm.status === "OPEN" ? "🟢 OPEN" : "⛔ HALTED";
+  $("pmStatus").style.color = pm.status === "OPEN" ? "var(--ok)" : "var(--bad)";
+  $("pmReason").textContent = pm.reason ?? "Normal trading";
+  $("pmLuld").disabled = $("pmMwcb").disabled = pm.status !== "OPEN"; $("pmResume").disabled = pm.status === "OPEN";
+  const l = v.listing;
+  $("lstSec").textContent = `tNVDA — tokenized ${l.ticker} (${l.issuer}) · Tier 1 NMS stock`;
+  $("lstNotice").textContent = `${l.noticeSentAt} (written notice to issuer, 30-day window)`;
+  $("lstWindow").textContent = `closed ${l.objectionWindowEnds}`;
+  $("lstStatus").textContent = l.status;
 }
+
+function renderAudit(rows) {
+  const body = $("auditRows");
+  if (!rows.length) { body.innerHTML = `<tr><td colspan="5" class="muted">No entries yet.</td></tr>`; return; }
+  body.innerHTML = rows.slice(0, 50).map(a => `<tr>
+    <td class="mono">${new Date(a.ts*1000).toISOString().replace("T"," ").slice(0,19)}</td>
+    <td>${a.actor}</td><td class="mono">${a.action}</td><td style="max-width:420px;word-break:break-word">${a.details}</td>
+    <td class="mono">${a.signature ? `<a href="${txLink(a.signature)}" target="_blank" style="color:var(--accent);text-decoration:none">${short(a.signature)}</a>` : "—"}</td>
+  </tr>`).join("");
+}
+
+async function refresh() {
+  const [st, v, au] = await Promise.all([api("/api/admin/state"), api("/api/venue"), api("/api/audit")]);
+  state = st; render(); renderVenue(v); renderAudit(au);
+}
+
+async function adminPost(path, body, label) {
+  document.body.classList.add("busy");
+  try { log(`▶ ${label}`); const r = await api(path, body); if (r.signature) log(`✔ on-chain: ${txLink(r.signature)}`); else log("✔ saved"); await refresh(); }
+  catch (e) { log(`✖ ${e.message}`); }
+  finally { document.body.classList.remove("busy"); }
+}
+$("advBtn").onclick = () => adminPost("/api/admin/venue", { nvdaAdvShares: Number($("adv").value) }, `Set NVDA ADV = ${$("adv").value}`);
+$("resetBreaches").onclick = () => adminPost("/api/admin/venue", { resetBreaches: true }, "Reset breach counter");
+$("pmLuld").onclick = () => adminPost("/api/admin/primary-market", { event: "LULD" }, "Primary feed: LULD pause on NVDA");
+$("pmMwcb").onclick = () => adminPost("/api/admin/primary-market", { event: "MWCB" }, "Primary feed: market-wide circuit breaker");
+$("pmResume").onclick = () => adminPost("/api/admin/primary-market", { event: "RESUME" }, "Primary feed: NVDA resumed");
 
 async function setKyc(wallet, next, why) {
   document.body.classList.add("busy");
@@ -174,7 +276,7 @@ $("haltOn").onclick = () => setHalt(true);
 $("haltOff").onclick = () => setHalt(false);
 
 refresh().catch(e => log(`✖ ${e.message}`));
-setInterval(() => refresh().catch(() => {}), 20000);
+setInterval(() => refresh().catch(() => {}), 10000);
 </script>
 </body>
 </html>

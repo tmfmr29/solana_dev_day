@@ -1,0 +1,122 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>TSV Public Notice</title>
+<link rel="icon" href="/icon.svg">
+<style>
+  :root { --bg:#0b1220; --card:#121a2b; --line:#233049; --text:#e6edf7; --muted:#8a9bb8; --accent:#60a5fa; --warn:#fbbf24; }
+  * { box-sizing:border-box; }
+  body { margin:0; background:var(--bg); color:var(--text); font:15px/1.65 -apple-system,BlinkMacSystemFont,"Segoe UI",Inter,sans-serif; }
+  header { display:flex; align-items:center; justify-content:space-between; padding:16px 24px; border-bottom:1px solid var(--line); }
+  header h1 { font-size:18px; margin:0; } header h1 span { color:var(--muted); font-weight:400; }
+  header a, main a { color:var(--accent); text-decoration:none; }
+  main { max-width:860px; margin:0 auto; padding:24px 16px 48px; }
+  .notice { background:#2a1f05; border:1px solid var(--warn); color:#fde68a; border-radius:12px; padding:16px 18px; margin-bottom:24px; }
+  h2 { font-size:15px; text-transform:uppercase; letter-spacing:.8px; color:var(--muted); margin:28px 0 8px; }
+  table { width:100%; border-collapse:collapse; font-size:14px; }
+  td { padding:8px 6px; border-bottom:1px solid var(--line); vertical-align:top; }
+  td:first-child { color:var(--muted); width:220px; }
+  .mono { font-family:ui-monospace,SFMono-Regular,Menlo,monospace; font-size:13px; word-break:break-all; }
+  ul { padding-left:20px; } li { margin:4px 0; }
+  .meta { color:var(--muted); font-size:13px; margin-top:32px; }
+</style>
+</head>
+<body>
+<header>
+  <h1>Public Notice &amp; Disclosures <span>· Digital Vector Solutions TSV</span></h1>
+  <a href="/">← Investor dashboard</a>
+</header>
+<main>
+  <div class="notice">
+    <b>This tokenized securities venue is not registered with the U.S. Securities and Exchange Commission as an exchange, broker-dealer, or clearing agency, and the SEC has not reviewed, approved, or endorsed this venue, its operator, or any security traded on it.</b>
+    This is a devnet prototype. No real securities or funds are involved.
+  </div>
+
+  <h2>1 · Operator</h2>
+  <table>
+    <tr><td>Operator</td><td>Digital Vector Solutions (a U.S. person)</td></tr>
+    <tr><td>Ownership</td><td>Privately held; sole owner-operator. No affiliate is an issuer of any security traded on the venue.</td></tr>
+    <tr><td>Contact</td><td><a href="mailto:tim.mindray@gmail.com">tim.mindray@gmail.com</a></td></tr>
+    <tr><td>Source code</td><td><a href="https://github.com/tmfmr29/solana_dev_day" target="_blank">github.com/tmfmr29/solana_dev_day</a> (on-chain <span class="mono">security.txt</span> published)</td></tr>
+  </table>
+
+  <h2>2 · Securities traded</h2>
+  <table>
+    <tr><td>tNVDA</td><td>Tokenized NVIDIA Corporation common stock (NVDA, Nasdaq) — Tier 1 Tokenized NMS Stock.</td></tr>
+    <tr><td>Token standard</td><td>Solana Token-2022 with transfer hook. Mint <span class="mono" id="mint">—</span></td></tr>
+    <tr><td>Compliance program</td><td><span class="mono" id="prog">—</span></td></tr>
+    <tr><td>Issuer notice</td><td id="notice">—</td></tr>
+    <tr><td>Holder rights</td><td>Prototype: no economic or governance rights are conveyed. A production venue must pass through dividends, voting and proxy materials equivalent to the underlying shares.</td></tr>
+  </table>
+
+  <h2>3 · Permissioning criteria</h2>
+  <p>A wallet may hold or receive tNVDA only if the venue's compliance program records, on-chain, that its owner:</p>
+  <ul>
+    <li>is a <b>U.S. person</b>;</li>
+    <li>has <b>cleared identity verification (KYC)</b> with the venue's provider;</li>
+    <li>is <b>not subject to OFAC sanctions</b> screening flags.</li>
+  </ul>
+  <p>These checks are enforced by the Token-2022 transfer hook on <b>every</b> transfer of tNVDA, in any wallet or application, not only on this venue's interface. Criteria are applied by the venue's compliance officer through the admin console; every change is recorded in the audit trail with its transaction signature.</p>
+
+  <h2>4 · Trading, clearing and settlement</h2>
+  <table>
+    <tr><td>Model</td><td>Spot only. Each trade is a single atomic Solana transaction: USDC from the investor to the venue, tNVDA from the venue to the investor. Either both legs settle or neither does.</td></tr>
+    <tr><td>Settlement asset</td><td>Circle USDC (a non-security crypto asset). Devnet mint <span class="mono" id="usdc">—</span></td></tr>
+    <tr><td>Pricing</td><td>Fixed reference price for the prototype (<span id="price">—</span> USDC per tNVDA). A production venue publishes its AMM curve and pool parameters.</td></tr>
+    <tr><td>Fees</td><td>Venue fee: <b>0.00%</b>. Network fee: paid by the investor (≈0.000005 SOL per transaction).</td></tr>
+    <tr><td>Clearing</td><td>On-chain, delivery-versus-payment, final at confirmation. No central counterparty; no intraday credit.</td></tr>
+  </table>
+
+  <h2>5 · Prohibited activity</h2>
+  <ul>
+    <li><b>No margin, credit or leverage.</b> The venue does not extend credit or permit borrowing against positions.</li>
+    <li><b>No hypothecation.</b> Venue assets are not lent, pledged or rehypothecated. Because tNVDA can only be held by whitelisted wallets, it cannot be deposited into lending protocols or other program-owned vaults that are not themselves permissioned.</li>
+    <li><b>No short sales</b> and no derivative instruments referencing tNVDA.</li>
+  </ul>
+
+  <h2>6 · Trading halts</h2>
+  <ul>
+    <li>tNVDA trading halts <b>concurrently</b> with any halt or suspension of NVDA on its primary listing exchange (LULD pauses, market-wide circuit breakers, regulatory halts).</li>
+    <li>The venue may halt trading at the direction of a regulator or on its own compliance judgment.</li>
+    <li>Halts are executed on-chain and block every transfer of tNVDA until lifted. Halt and resume events appear in the audit trail and on the dashboard.</li>
+  </ul>
+
+  <h2>7 · Volume limits</h2>
+  <p>Monthly venue volume in tNVDA is limited to <b><span id="capPct">—</span>% of NVDA's consolidated average daily volume</b>. Month-to-date usage is displayed on the dashboard and monitored continuously. A breach halts trading automatically; a second breach requires a three-month pause in tNVDA trading and an update to this notice within five business days.</p>
+
+  <h2>8 · Transparency and reporting</h2>
+  <ul>
+    <li>Every executed trade is published to the <a href="/#tape">public trade tape</a> within 10 minutes of execution (masked wallet, size, USD price, reporting latency, transaction signature).</li>
+    <li>Pool address, liquidity, and daily volume are published in machine-readable form at <a href="/api/venue">/api/venue</a>; the tape at <a href="/api/tape">/api/tape</a> and <a href="/api/tape.csv">/api/tape.csv</a>. Data remain freely accessible for at least 30 days.</li>
+  </ul>
+
+  <h2>9 · MEV and market-integrity policy</h2>
+  <ul>
+    <li>Trades are constructed server-side at a fixed reference price and signed by the investor's wallet; there is no slippage parameter for a third party to exploit, so sandwich attacks cannot change execution price.</li>
+    <li>Production submission goes through a private RPC / fair-ordering endpoint to prevent front-running by validators or searchers.</li>
+    <li>The venue monitors the tape for wash trading and manipulative patterns; suspected activity is reported and the wallets involved are suspended pending review.</li>
+  </ul>
+
+  <h2>10 · Books and records</h2>
+  <p>The venue retains complete trading records and compliance documentation (trade tape, whitelisting changes, halt events, venue settings) for the duration of its exemption and at least three years thereafter, in human-readable and machine-readable form, available to SEC staff on request. See <a href="/api/audit.csv">audit trail (CSV)</a>.</p>
+
+  <h2>11 · Investor identity and AML</h2>
+  <p>Fiat on-ramp is provided by MoonPay, which performs identity verification and sanctions screening before delivering USDC to the investor's wallet. The venue binds the verified identity to the wallet it whitelists. Transfers at or above $3,000 are subject to Travel Rule information sharing with counterparties' VASPs (not implemented in this prototype).</p>
+
+  <p class="meta">This notice is updated upon any material change to the venue's operation and at the end of each calendar quarter. Version <span id="ver">—</span>.</p>
+</main>
+<script>
+(async () => {
+  const c = await fetch("/api/config").then(r => r.json());
+  const v = await fetch("/api/venue").then(r => r.json());
+  const $ = (id) => document.getElementById(id);
+  $("mint").textContent = c.tnvdaMint; $("prog").textContent = c.programId; $("usdc").textContent = c.usdcMint; $("price").textContent = c.priceUsdcPerTnvda;
+  $("capPct").textContent = v.volumeCap.capPct;
+  $("notice").textContent = `Written notice delivered to ${v.listing.issuer} on ${v.listing.noticeSentAt}; objection window closed ${v.listing.objectionWindowEnds}. ${v.listing.status}.`;
+  $("ver").textContent = new Date().toISOString().slice(0,10);
+})();
+</script>
+</body>
+</html>
