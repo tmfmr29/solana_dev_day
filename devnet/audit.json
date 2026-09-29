@@ -86,5 +86,40 @@
     "action": "KYC_UPDATE",
     "details": "5Wzrjp7PJXbh7koDibHP9hkeV8J2b1QdXzuEo6W6SfR3 us=true sanctioned=false cleared=true",
     "signature": "3T3MXu6638iEaud5jpkzCSaiWGFG1AkLUfkopgoAvVNwfu3RTa1h6CqDu2HPh9VtTLwmZGQCW3S3deCM4eH85ubu"
+  },
+  {
+    "ts": 1790719659,
+    "actor": "compliance officer (admin console)",
+    "action": "TRADING_HALT",
+    "details": "manual",
+    "signature": "61FvUYKToKrLmxtM6U3yh9r2DXrPrGQJiByCYq9Q25g8Yb6txf17vTo8z5JD1Q3QC8hkgs8h7gSv1T5FcZ5oXtQF"
+  },
+  {
+    "ts": 1790719664,
+    "actor": "compliance officer (admin console)",
+    "action": "TRADING_RESUME",
+    "details": "manual",
+    "signature": "n4B5wwyMgtuBzjUeeXeYdN1TTMhPU6n5gcvYtbBsugA8VbEnE4jZpUUZKNkyHSn42i9Q2z1g4mREHYhFESi6QGj"
+  },
+  {
+    "ts": 1790719674,
+    "actor": "compliance officer (admin console)",
+    "action": "KYC_UPDATE",
+    "details": "5Wzrjp7PJXbh7koDibHP9hkeV8J2b1QdXzuEo6W6SfR3 us=true sanctioned=true cleared=true",
+    "signature": "4gCAAt1SY3NM8HBqWE3LMJRwv3ntfUhurHLGL1xK9EqG1t7o5Ux295B57QobcSL1dYwYHBwfc7uD6TP9iWbxdtfh"
+  },
+  {
+    "ts": 1790720229,
+    "actor": "compliance officer (admin console)",
+    "action": "TRADING_HALT",
+    "details": "manual",
+    "signature": "AucNeRpXp6A34gWAaztMtx3inb4C36FkfS6DFTbbY9yge6LqWaTWLcRtcxKPitBduTmjzf37H2n2ykK4qXobeiU"
+  },
+  {
+    "ts": 1790720235,
+    "actor": "compliance officer (admin console)",
+    "action": "TRADING_RESUME",
+    "details": "manual",
+    "signature": "8ThAa9gdPYRknukZWrPn6diEN9bwEpV22mdAD2Ks5uDihVvHn7J2fHKebJdLT2KdgF2ZQ2Kqr5TDEeC58C9MsbH"
   }
 ]
