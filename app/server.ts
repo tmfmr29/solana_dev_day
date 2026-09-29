@@ -13,7 +13,7 @@ import * as path from "path";
 import * as fs from "fs";
 import * as crypto from "crypto";
 import bs58 from "bs58";
-import { PublicKey, SystemProgram, Transaction } from "@solana/web3.js";
+import { PublicKey, SystemProgram, Transaction, TransactionInstruction } from "@solana/web3.js";
 import {
   ASSOCIATED_TOKEN_PROGRAM_ID, TOKEN_2022_PROGRAM_ID,
   createAssociatedTokenAccountIdempotentInstruction,
@@ -88,6 +88,7 @@ app.get("/api/config", (_req, res) => {
     treasury: cfg.treasury,
     priceUsdcPerTnvda: cfg.priceUsdcPerTnvda,
     moonpayPublishableKey: process.env.MOONPAY_PUBLISHABLE_KEY ?? null,
+    rpcUrl: process.env.RPC_URL ?? "https://api.devnet.solana.com",
   });
 });
 
@@ -226,6 +227,25 @@ app.get("/api/audit.csv", localOnly, (_req, res) => {
   res.type("text/csv").send(toCsv(audit.map((a) => ({ timestamp_utc: new Date(a.ts * 1000).toISOString(), actor: a.actor, action: a.action, details: a.details, signature: a.signature ?? "" }))));
 });
 
+// ---- Order book of record (origination → route → execution / reject / expire) --
+// Every swap request is an order. Its ID is written into the transaction as a memo so the
+// on-chain execution can be linked back to the origination event (CAT-style lifecycle).
+const MEMO_PROGRAM = new PublicKey("MemoSq4gqABAXKb96qnH8TysNcWxMyWCqXgDLGmfcHr");
+const VENUE_IMID = "DVSTSV"; // venue identifier used in event files (industry member ID equivalent)
+type Order = { orderId: string; ts: number; wallet: string; fdid: string; side: "buy" | "sell"; qty: number; usdc: number; price: number; status: "NEW" | "REJECTED" | "FILLED" | "EXPIRED"; reason?: string; signature?: string; slot?: number; filledAt?: number };
+const ORDERS_PATH = path.join(__dirname, "..", "devnet", "orders.json");
+const orders = new Map<string, Order>();
+try { for (const o of JSON.parse(fs.readFileSync(ORDERS_PATH, "utf8")) as Order[]) orders.set(o.orderId, o); } catch {}
+const saveOrders = () => fs.writeFileSync(ORDERS_PATH, JSON.stringify([...orders.values()], null, 2));
+const fdidOf = (wallet: string) => "FD" + crypto.createHash("sha256").update(wallet).digest("hex").slice(0, 14).toUpperCase();
+function newOrderId() { const t = Date.now().toString(36).toUpperCase(), r = crypto.randomBytes(4).toString("hex").toUpperCase(); return `ORD-${t}-${r}`; }
+function expireStaleOrders() {
+  const cutoff = Math.floor(Date.now() / 1000) - 600; let changed = false;
+  for (const o of orders.values()) if (o.status === "NEW" && o.ts < cutoff) { o.status = "EXPIRED"; o.reason = "Not executed within 10 minutes (cancelled in wallet or never submitted)"; changed = true; }
+  if (changed) saveOrders();
+}
+setInterval(expireStaleOrders, 60000);
+
 // ---- Solana Pay transaction request ----------------------------------------
 app.get("/api/swap", (_req, res) => {
   res.json({ label: "TSV Compliant Swap", icon: `${_req.protocol}://${_req.get("host")}/icon.svg` });
@@ -274,6 +294,8 @@ app.post("/api/swap", async (req, res) => {
       tx.add(createTransferCheckedInstruction(TREASURY_USDC, USDC, investorUsdc, TREASURY, usdcBase, USDC_DECIMALS, [], USDC_PROGRAM));
     }
     const buyer = investor; // fee payer / signer in the wallet
+    const orderId = newOrderId();
+    tx.add(new TransactionInstruction({ programId: MEMO_PROGRAM, keys: [], data: Buffer.from(`tsv:order:${orderId}`) }));
 
     tx.feePayer = buyer;
     tx.recentBlockhash = (await connection.getLatestBlockhash("confirmed")).blockhash;
@@ -286,20 +308,22 @@ app.post("/api/swap", async (req, res) => {
     const preview = sim?.value?.err
       ? { ok: false, reason: errLine?.replace(/.*Error Code: /, "").trim() ?? JSON.stringify(sim.value.err) }
       : { ok: true, reason: null };
-    if (!preview.ok) recordRejected({ wallet: investor.toBase58(), side, tnvda: Number(tnvdaBase) / 10 ** TNVDA_DECIMALS, usdc: Number(usdcBase) / 10 ** USDC_DECIMALS, reason: preview.reason ?? "unknown" });
+    const order: Order = { orderId, ts: Math.floor(Date.now() / 1000), wallet: investor.toBase58(), fdid: fdidOf(investor.toBase58()), side, qty: Number(tnvdaBase) / 10 ** TNVDA_DECIMALS, usdc: Number(usdcBase) / 10 ** USDC_DECIMALS, price: cfg.priceUsdcPerTnvda, status: preview.ok ? "NEW" : "REJECTED", reason: preview.ok ? undefined : (preview.reason ?? "unknown") };
+    orders.set(orderId, order); saveOrders();
+    if (!preview.ok) recordRejected({ wallet: investor.toBase58(), side, tnvda: order.qty, usdc: order.usdc, reason: preview.reason ?? "unknown" });
 
     const usdcUi = Number(usdcBase) / 10 ** USDC_DECIMALS, tnvdaUi = Number(tnvdaBase) / 10 ** TNVDA_DECIMALS;
     res.json({
       transaction: tx.serialize({ requireAllSignatures: false, verifySignatures: false }).toString("base64"),
       message: side === "buy" ? `Swap ${usdcUi} USDC for ${tnvdaUi} tNVDA` : `Sell ${tnvdaUi} tNVDA for ${usdcUi} USDC`,
-      side, usdc: usdcUi, tnvda: tnvdaUi, tnvdaOut: side === "buy" ? tnvdaUi : 0, price: cfg.priceUsdcPerTnvda,
+      side, usdc: usdcUi, tnvda: tnvdaUi, tnvdaOut: side === "buy" ? tnvdaUi : 0, price: cfg.priceUsdcPerTnvda, orderId,
       preview,
     });
   } catch (e: any) { res.status(400).json({ error: String(e?.message ?? e) }); }
 });
 
 // ---- Public trade tape -----------------------------------------------------
-type Trade = { signature: string; blockTime: number; reportedAt: number; side: "buy" | "sell"; buyer: string; buyerMasked: string; usdcIn: number; tnvdaOut: number; latencySec: number; backfilled?: boolean };
+type Trade = { signature: string; blockTime: number; reportedAt: number; side: "buy" | "sell"; buyer: string; buyerMasked: string; usdcIn: number; tnvdaOut: number; latencySec: number; backfilled?: boolean; orderId?: string; slot?: number };
 const TAPE_PATH = path.join(__dirname, "..", "devnet", "tape.json");
 const tape = new Map<string, Trade>();
 try { for (const t of JSON.parse(fs.readFileSync(TAPE_PATH, "utf8")) as Trade[]) tape.set(t.signature, t); } catch {}
@@ -334,15 +358,23 @@ async function refreshTape() {
     // A trade that happened before this server process started was reported by a previous
     // run (or never); we can't measure its latency now, so mark it back-filled.
     const backfilled = blockTime < serverStartedAt - 30;
+    // Link to the originating order via the memo instruction.
+    let orderId: string | undefined;
+    for (const ix of (tx.transaction.message.instructions as any[])) {
+      if (ix.program === "spl-memo" && typeof ix.parsed === "string" && ix.parsed.startsWith("tsv:order:")) orderId = ix.parsed.slice("tsv:order:".length);
+    }
     tape.set(s.signature, {
       signature: s.signature, blockTime, reportedAt: now, side,
       buyer, buyerMasked: mask(buyer), usdcIn, tnvdaOut: tnvdaFromTreasury,
-      latencySec: backfilled ? 0 : Math.max(0, now - blockTime), backfilled,
+      latencySec: backfilled ? 0 : Math.max(0, now - blockTime), backfilled, orderId, slot: s.slot,
     });
     saveTape();
+    const o = orderId ? orders.get(orderId) : undefined;
+    if (o) { o.status = "FILLED"; o.signature = s.signature; o.slot = s.slot; o.filledAt = blockTime; saveOrders(); }
   }
 }
-setInterval(() => refreshTape().catch((e) => console.error("tape:", String(e.message).slice(0, 80))), 15000);
+let lastTapeErr = 0;
+setInterval(() => refreshTape().catch((e) => { const now = Date.now(); if (now - lastTapeErr > 60000) { lastTapeErr = now; console.error(`tape: ${String(e.message).slice(0, 80)} (devnet RPC unreachable from this network; will keep retrying)`); } }), 15000);
 refreshTape().catch(() => {});
 
 app.get("/api/tape", (_req, res) => {
@@ -489,6 +521,32 @@ async function generateReport(type: string, from: number, to: number, generatedB
   const rejRows = rej.map((r) => ({ timestamp_utc: fmtTs(r.ts), wallet_masked: mask(r.wallet), counterparty_id: crypto.createHash("sha256").update(r.wallet).digest("hex").slice(0, 16), side: r.side.toUpperCase(), quantity: r.tnvda, notional_usd: r.usdc, rejection_code: r.code, reason: r.reason }));
   const cap = volumeCapStatus();
 
+  // CAT-style order lifecycle events for the period (modeled on MENO / MEOR / MEOT / MEOC).
+  expireStaleOrders();
+  const nano = (ts: number) => new Date(ts * 1000).toISOString().replace("Z", "000000Z");
+  const catEvents: any[] = [];
+  const tradeByOrder = new Map([...tape.values()].filter((t) => t.orderId).map((t) => [t.orderId!, t]));
+  const sideCode = (sd: string) => (sd === "buy" ? "B" : "SL");
+  for (const o of [...orders.values()].sort((a, b) => a.ts - b.ts)) {
+    const t = tradeByOrder.get(o.orderId);
+    const inPeriod = (ts: number) => ts >= from && ts < to;
+    const base = { orderID: o.orderId, CATReporterIMID: VENUE_IMID, firmDesignatedID: o.fdid, accountHolderType: "I", symbol: "tNVDA", underlying: "NVDA", pair: "tNVDA/USDC", side: sideCode(o.side), quantity: o.qty, orderType: "LMT", price: o.price, timeInForce: "IOC", tradingSession: "REG", handlingInstructions: "DVP-ATOMIC", wallet_masked: mask(o.wallet) };
+    if (inPeriod(o.ts)) catEvents.push({ type: "MENO", description: "New order (origination)", eventTimestamp: nano(o.ts), ...base, receiverIMID: VENUE_IMID, senderType: "C", destination: "AMM-POOL", destinationAddress: cfg.treasury });
+    if (o.status === "REJECTED" && inPeriod(o.ts)) catEvents.push({ type: "MEOC", description: "Order rejected (compliance hook)", eventTimestamp: nano(o.ts), ...base, cancelInitiator: "F", rejectCode: (o.reason ?? "").match(/^[A-Za-z]+/)?.[0] ?? "REJECTED", rejectReason: o.reason });
+    if (o.status === "EXPIRED" && inPeriod(o.ts + 600)) catEvents.push({ type: "MEOC", description: "Order cancelled/expired", eventTimestamp: nano(o.ts + 600), ...base, cancelInitiator: "C", rejectCode: "EXPIRED", rejectReason: o.reason });
+    if (o.status === "FILLED" && t && inPeriod(t.blockTime)) {
+      catEvents.push({ type: "MEOR", description: "Order routed to pool", eventTimestamp: nano(t.blockTime), ...base, routedOrderID: t.signature.slice(0, 20), destination: "AMM-POOL", destinationAddress: cfg.treasury, blockHeight: t.slot ?? "", blockTimestamp: fmtTs(t.blockTime) });
+      catEvents.push({ type: "MEOT", description: "Order executed", eventTimestamp: nano(t.blockTime), ...base, tradeID: t.signature, executionPrice: +(t.usdcIn / t.tnvdaOut).toFixed(6), executedQuantity: t.tnvdaOut, notional: t.usdcIn, liquidityIndicator: "SWAPPER", contraLiquidityIndicator: "LIQUIDITY_PROVIDER", contraFirmDesignatedID: fdidOf(cfg.treasury), executionVenue: VENUE_IMID, blockHeight: t.slot ?? "", blockTimestamp: fmtTs(t.blockTime), settlement: "T+0 atomic (USDC)" });
+    }
+  }
+  // Executions with no linked order (trades made outside this server, e.g. scripts): still report the execution.
+  for (const t of trades) if (!t.orderId) catEvents.push({ type: "MEOT", description: "Order executed (no origination record — external submission)", eventTimestamp: nano(t.blockTime), orderID: "", CATReporterIMID: VENUE_IMID, firmDesignatedID: fdidOf(t.buyer), accountHolderType: "I", symbol: "tNVDA", underlying: "NVDA", pair: "tNVDA/USDC", side: sideCode(t.side ?? "buy"), quantity: t.tnvdaOut, orderType: "LMT", price: +(t.usdcIn / t.tnvdaOut).toFixed(6), tradeID: t.signature, executionPrice: +(t.usdcIn / t.tnvdaOut).toFixed(6), executedQuantity: t.tnvdaOut, notional: t.usdcIn, liquidityIndicator: "SWAPPER", contraLiquidityIndicator: "LIQUIDITY_PROVIDER", contraFirmDesignatedID: fdidOf(cfg.treasury), executionVenue: VENUE_IMID, blockHeight: t.slot ?? "", blockTimestamp: fmtTs(t.blockTime), wallet_masked: t.buyerMasked });
+  catEvents.sort((a, b) => a.eventTimestamp.localeCompare(b.eventTimestamp));
+  const catCols = ["type","description","eventTimestamp","orderID","CATReporterIMID","firmDesignatedID","accountHolderType","symbol","underlying","pair","side","quantity","orderType","price","timeInForce","tradingSession","handlingInstructions","destination","destinationAddress","routedOrderID","tradeID","executionPrice","executedQuantity","notional","liquidityIndicator","contraLiquidityIndicator","contraFirmDesignatedID","executionVenue","blockHeight","blockTimestamp","settlement","cancelInitiator","rejectCode","rejectReason","wallet_masked"];
+  const catRows = catEvents.map((e) => Object.fromEntries(catCols.map((c) => [c, e[c] ?? ""])));
+  const catSummary = { events: catEvents.length, MENO: catEvents.filter((e) => e.type === "MENO").length, MEOR: catEvents.filter((e) => e.type === "MEOR").length, MEOT: catEvents.filter((e) => e.type === "MEOT").length, MEOC: catEvents.filter((e) => e.type === "MEOC").length,
+    deadline: "08:00 ET on T+1", note: "Event types and fields are modeled on the CAT reporting specification (FINRA Rule 6800 series). A live submission must be validated against the current CAT technical specifications and transmitted through the CAT reporter interface." };
+
   const seq = (reportsIndex[reportsIndex.length - 1]?.seq ?? 0) + 1;
   const prevHash = reportsIndex[reportsIndex.length - 1]?.hash ?? null;
   const id = `${type}-${new Date(from * 1000).toISOString().slice(0, 10)}-${String(seq).padStart(4, "0")}`;
@@ -502,6 +560,7 @@ async function generateReport(type: string, from: number, to: number, generatedB
       volume_cap: { month: cap.month, mtd_share_volume: cap.mtdVolume, cap_shares: cap.cap, pct_used: +cap.pct.toFixed(4), breaches_on_record: cap.breaches.length },
       pool_end_of_period: { tnvda_liquidity: pool.tnvdaLiquidity, usdc_liquidity: pool.usdcLiquidity, price_usd: pool.priceUsdcPerTnvda }, participants: roster },
     trade_blotter: blotter, daily_summary: daily, compliance_events: evRows, rejected_orders: rejRows,
+    cat_daily_file: { summary: catSummary, events: catRows },
   };
   const canonical = JSON.stringify(body);
   const hash = crypto.createHash("sha256").update(canonical).digest("hex");
@@ -517,8 +576,10 @@ async function generateReport(type: string, from: number, to: number, generatedB
   fs.writeFileSync(path.join(dir, "daily_summary.csv"), toCsv(daily));
   fs.writeFileSync(path.join(dir, "compliance_events.csv"), toCsv(evRows));
   fs.writeFileSync(path.join(dir, "rejected_orders.csv"), toCsv(rejRows));
+  fs.writeFileSync(path.join(dir, "cat_daily_file.csv"), toCsv(catRows));
+  fs.writeFileSync(path.join(dir, "cat_daily_file.json"), JSON.stringify({ reporter: VENUE_IMID, report_id: id, period_start_utc: fmtTs(from), period_end_utc: fmtTs(to), ...catSummary, events: catRows }, null, 2));
   fs.writeFileSync(path.join(dir, "report.html"), renderReportHtml(envelope));
-  const meta: ReportMeta = { id, seq, type, from, to, generatedAt: now, generatedBy, trades: trades.length, hash, prevHash, signature, files: ["report.html", "report.json", "trade_blotter.csv", "daily_summary.csv", "compliance_events.csv", "rejected_orders.csv"] };
+  const meta: ReportMeta = { id, seq, type, from, to, generatedAt: now, generatedBy, trades: trades.length, hash, prevHash, signature, files: ["report.html", "report.json", "trade_blotter.csv", "daily_summary.csv", "compliance_events.csv", "rejected_orders.csv", "cat_daily_file.csv", "cat_daily_file.json"] };
   reportsIndex.push(meta); fs.writeFileSync(REPORTS_INDEX, JSON.stringify(reportsIndex, null, 2));
   logAudit({ actor: generatedBy, action: "REGULATORY_REPORT", details: `${id}: ${trades.length} trades, ${rej.length} rejections, ${events.length} events; sha256 ${hash.slice(0, 16)}…` });
   return meta;
@@ -544,7 +605,8 @@ table{border-collapse:collapse;width:100%;font-size:12px}th,td{border:1px solid 
 <h2>4 · Daily summary</h2>${table(r.daily_summary)}
 <h2>5 · Compliance events (${r.compliance_events.length})</h2>${table(r.compliance_events)}
 <h2>6 · Rejected orders (${r.rejected_orders.length})</h2>${table(r.rejected_orders)}
-<h2>7 · Attestation</h2><div class="box">${esc(r.attestation.statement)}<br><br><span class="mono">content_sha256: ${esc(r.attestation.content_sha256)}<br>signer (venue admin key): ${esc(r.attestation.signer)}<br>signature (${esc(r.attestation.algorithm)}): ${esc(r.attestation.signature)}</span><br><br><span class="muted">Verify: recompute SHA-256 over the canonical JSON body (all fields except <i>attestation</i>) and check the ed25519 signature against the signer's public key. Each trade_id is a Solana transaction signature that can be independently confirmed on-chain.</span></div>
+<h2>7 · CAT daily file (${r.cat_daily_file.events.length} events · ${esc(r.cat_daily_file.summary.MENO)} MENO / ${esc(r.cat_daily_file.summary.MEOR)} MEOR / ${esc(r.cat_daily_file.summary.MEOT)} MEOT / ${esc(r.cat_daily_file.summary.MEOC)} MEOC · due ${esc(r.cat_daily_file.summary.deadline)})</h2><p class="muted">${esc(r.cat_daily_file.summary.note)}</p>${table(r.cat_daily_file.events, ["type","eventTimestamp","orderID","firmDesignatedID","side","quantity","price","executionPrice","executedQuantity","liquidityIndicator","blockHeight","tradeID","rejectCode"])}
+<h2>8 · Attestation</h2><div class="box">${esc(r.attestation.statement)}<br><br><span class="mono">content_sha256: ${esc(r.attestation.content_sha256)}<br>signer (venue admin key): ${esc(r.attestation.signer)}<br>signature (${esc(r.attestation.algorithm)}): ${esc(r.attestation.signature)}</span><br><br><span class="muted">Verify: recompute SHA-256 over the canonical JSON body (all fields except <i>attestation</i>) and check the ed25519 signature against the signer's public key. Each trade_id is a Solana transaction signature that can be independently confirmed on-chain.</span></div>
 <p class="muted" style="margin-top:28px">This venue is a devnet prototype and is not registered with or endorsed by the U.S. Securities and Exchange Commission.</p>
 </body></html>`;
 }
@@ -560,7 +622,19 @@ setInterval(async () => {
   }
 }, 60000);
 
-app.get("/api/admin/reports", localOnly, (_req, res) => res.json({ reports: [...reportsIndex].reverse(), nextDaily: "20:00 ET", lastDailyFor }));
+let lastCatFor: string | null = reportsIndex.filter((r) => r.type === "cat-t1").map((r) => etParts(new Date(r.from * 1000)).date).pop() ?? null;
+setInterval(async () => {
+  const now = new Date(), p = etParts(now);
+  if ((p.h > 7 || (p.h === 7 && p.min >= 30)) && p.h < 20) {
+    const y = new Date(now.getTime() - 86400000); const yd = etParts(y).date;
+    if (lastCatFor !== yd) {
+      lastCatFor = yd; const [from, to] = etDayBounds(yd);
+      try { await generateReport("cat-t1", from, to, "scheduler (07:30 ET, CAT T+1 file)"); } catch (e: any) { console.error("cat report:", e.message); }
+    }
+  }
+}, 60000);
+
+app.get("/api/admin/reports", localOnly, (_req, res) => res.json({ reports: [...reportsIndex].reverse(), nextDaily: "20:00 ET (EOD) and 07:30 ET (CAT T+1 file for previous day)", lastDailyFor, lastCatFor }));
 app.post("/api/admin/report", localOnly, async (req, res) => {
   try {
     const type = String(req.body.type ?? "adhoc");
@@ -622,6 +696,7 @@ app.get("/api/activity/:wallet", (req, res) => {
 
 app.listen(PORT, () => {
   console.log(`TSV Swap demo running at http://localhost:${PORT}`);
+  console.log(`RPC: ${process.env.RPC_URL ?? "https://api.devnet.solana.com (public, rate-limited — set RPC_URL in app/.env for a dedicated endpoint)"}`);
   console.log(`Treasury ${TREASURY.toBase58()}  tNVDA ${TNVDA.toBase58()}  price ${cfg.priceUsdcPerTnvda} USDC/tNVDA`);
   console.log(`MoonPay key: ${process.env.MOONPAY_PUBLISHABLE_KEY ? "set" : "NOT SET (add app/.env)"}; secret for signed URLs: ${process.env.MOONPAY_SECRET_KEY ? "set" : "not set"}`);
 });

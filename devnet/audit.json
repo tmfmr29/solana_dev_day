@@ -18,5 +18,17 @@
     "actor": "compliance officer (admin console)",
     "action": "REGULATORY_REPORT",
     "details": "month-2026-09-01-0001: 7 trades, 0 rejections, 2 events; sha256 dc81e4b928bd4c04…"
+  },
+  {
+    "ts": 1790710632,
+    "actor": "scheduler (07:30 ET, CAT T+1 file)",
+    "action": "REGULATORY_REPORT",
+    "details": "cat-t1-2026-09-28-0002: 0 trades, 0 rejections, 0 events; sha256 c80fec41d692c704…"
+  },
+  {
+    "ts": 1790711042,
+    "actor": "compliance officer (admin console)",
+    "action": "REGULATORY_REPORT",
+    "details": "today-2026-09-29-0003: 8 trades, 0 rejections, 4 events; sha256 11623cf9f9525923…"
   }
 ]

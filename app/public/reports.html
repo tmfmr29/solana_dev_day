@@ -126,6 +126,19 @@ async function show(id) {
     ${r.rejected_orders.map(x => `<tr><td>${esc(x.timestamp_utc).replace("T"," ").slice(0,19)}</td><td class="mono">${x.wallet_masked} <span class="muted">${x.counterparty_id.slice(0,8)}</span></td><td>${x.side}</td><td>${x.quantity}</td><td>$${fmt(x.notional_usd)}</td><td class="mono warn">${esc(x.rejection_code)}</td><td style="word-break:break-word" class="muted">${esc(x.reason)}</td></tr>`).join("")}</tbody></table></div>` : `<div class="empty">No orders were refused in this period.</div>`}
   </div>
 
+  ${r.cat_daily_file ? `<div class="card">
+    <h2>CAT daily file <span class="muted">${r.cat_daily_file.events.length} events · due ${esc(r.cat_daily_file.summary.deadline)} · <a href="/reports/${id}/cat_daily_file.csv">CSV</a> · <a href="/reports/${id}/cat_daily_file.json">JSON</a></span></h2>
+    <div class="tiles" style="margin-bottom:12px">
+      <div class="tile"><div class="l">MENO · new orders</div><div class="v">${r.cat_daily_file.summary.MENO}</div><div class="s">origination events</div></div>
+      <div class="tile"><div class="l">MEOR · routed</div><div class="v">${r.cat_daily_file.summary.MEOR}</div><div class="s">to pool ${short(h.pool_address)}</div></div>
+      <div class="tile"><div class="l">MEOT · executed</div><div class="v ok">${r.cat_daily_file.summary.MEOT}</div><div class="s">with tx hash + block height</div></div>
+      <div class="tile"><div class="l">MEOC · rejected / cancelled</div><div class="v ${r.cat_daily_file.summary.MEOC ? "warn" : ""}">${r.cat_daily_file.summary.MEOC}</div><div class="s">hook refusals, halts, expiries</div></div>
+    </div>
+    ${r.cat_daily_file.events.length ? `<div class="scroll"><table><thead><tr><th>Type</th><th>Event time</th><th>Order ID</th><th>FDID</th><th>Side</th><th>Qty</th><th>Limit</th><th>Exec price</th><th>Exec qty</th><th>Liquidity</th><th>Block</th><th>Trade ID</th><th>Reject</th></tr></thead><tbody>
+    ${r.cat_daily_file.events.map(e => `<tr><td class="mono ${e.type === "MEOT" ? "ok" : e.type === "MEOC" ? "warn" : ""}" title="${esc(e.description)}">${e.type}</td><td class="mono">${esc(e.eventTimestamp).replace("T"," ").slice(0,23)}</td><td class="mono">${esc(e.orderID) || "<span class=muted>external</span>"}</td><td class="mono">${esc(e.firmDesignatedID)}</td><td>${e.side}</td><td>${e.quantity}</td><td>$${fmt(e.price)}</td><td>${e.executionPrice === "" ? "" : "$" + fmt(e.executionPrice)}</td><td>${e.executedQuantity}</td><td class="muted">${e.liquidityIndicator}</td><td class="mono">${e.blockHeight}</td><td class="mono">${e.tradeID ? `<a href="${txLink(e.tradeID)}" target="_blank">${short(e.tradeID)}</a>` : ""}</td><td class="mono warn" title="${esc(e.rejectReason)}">${esc(e.rejectCode)}</td></tr>`).join("")}</tbody></table></div>` : `<div class="empty">No order events in this period.</div>`}
+    <p class="muted" style="margin:10px 0 0;font-size:12px">${esc(r.cat_daily_file.summary.note)}</p>
+  </div>` : ""}
+
   <div class="card">
     <h2>Attestation &amp; integrity</h2>
     <div id="verify" class="verify">

@@ -149,7 +149,7 @@
 
 <script>
 const { Connection, PublicKey, Transaction } = solanaWeb3;
-const conn = new Connection("https://api.devnet.solana.com", "confirmed");
+let conn = new Connection("https://api.devnet.solana.com", "confirmed");
 const $ = (id) => document.getElementById(id);
 const fmt = (n, d = 2) => Number(n).toLocaleString(undefined, { minimumFractionDigits: d, maximumFractionDigits: d });
 const short = (s) => s.slice(0, 4) + "…" + s.slice(-4);
@@ -319,6 +319,7 @@ $("stmtBtn").onclick = () => { if (pubkey) location.href = `/api/activity/${pubk
 
 (async () => {
   cfg = await fetch("/api/config").then(r => r.json());
+  if (cfg.rpcUrl) conn = new Connection(cfg.rpcUrl, "confirmed");
   $("connectBtn").onclick = connect;
   quote();
   await refresh();

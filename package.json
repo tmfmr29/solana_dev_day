@@ -3,7 +3,7 @@
   "private": true,
   "scripts": {
     "test": "ts-mocha -p ./tsconfig.json -t 1000000 tests/**/*.ts",
-    "start": "ts-node --transpile-only app/server.ts",
+    "start": "NODE_OPTIONS=--dns-result-order=ipv4first ts-node --transpile-only app/server.ts",
     "setup:devnet": "ts-node --transpile-only scripts/setup-tnvda.ts",
     "demo:revert": "ts-node --transpile-only scripts/demo-revert.ts",
     "halt": "ts-node --transpile-only scripts/halt.ts",

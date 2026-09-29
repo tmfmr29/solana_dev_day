@@ -112,8 +112,7 @@
 
 <script>
 const { Connection, PublicKey, Transaction } = solanaWeb3;
-const RPC = "https://api.devnet.solana.com";
-const conn = new Connection(RPC, "confirmed");
+let conn = new Connection("https://api.devnet.solana.com", "confirmed");
 const TOKEN_2022 = new PublicKey("TokenzQdBNbLqP5VEhdkAS6EPFLC1PHnBqCXEpPxuEb");
 const TOKEN = new PublicKey("TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA");
 let cfg, wallet = null, pubkey = null;
@@ -237,6 +236,7 @@ async function loadTape() {
 
 (async () => {
   cfg = await fetch("/api/config").then(r => r.json());
+  if (cfg.rpcUrl) conn = new Connection(cfg.rpcUrl, "confirmed");
   $("price").textContent = `${cfg.priceUsdcPerTnvda} USDC per tNVDA`;
   updateOut();
   $("usdc").addEventListener("input", updateOut);
