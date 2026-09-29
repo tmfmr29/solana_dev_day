@@ -30,5 +30,19 @@
     "actor": "compliance officer (admin console)",
     "action": "REGULATORY_REPORT",
     "details": "today-2026-09-29-0003: 8 trades, 0 rejections, 4 events; sha256 11623cf9f9525923…"
+  },
+  {
+    "ts": 1790715301,
+    "actor": "compliance officer (admin console)",
+    "action": "TRADING_HALT",
+    "details": "manual",
+    "signature": "2cicCZLnzYw6SZwDdmw19gPHum5PL6yYGL8F6AzmcH4K9psF1RYMnwVRnTWBMsFLxcJfa8KoamGDPm8K31Snu2iE"
+  },
+  {
+    "ts": 1790715308,
+    "actor": "compliance officer (admin console)",
+    "action": "TRADING_RESUME",
+    "details": "manual",
+    "signature": "5syt3qY4VzTMuWcm13zWDN7XhwbLJAow1qCV1AQKPgnTpDWpWy3tbVGUBFscgh55uYHBYsZ7CT1iuXdHkTCcAQQd"
   }
 ]

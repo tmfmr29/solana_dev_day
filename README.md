@@ -1,9 +1,43 @@
-# TSV Swap — Compliant Tokenized-Security Venue on Solana
+# TSV Swap — compliance that lives inside the token
 
-A working prototype of a **tokenized-security venue (TSV)** under the SEC's exemption model:
-a tokenized security (`tNVDA`) that can only move between whitelisted, KYC-cleared U.S. persons,
-paired against Circle USDC for settlement, funded through MoonPay, and reported on a public
-trade tape within the 10-minute transparency window.
+**Wedge: Infrastructure / compliance.** A tokenized-security venue where the rules are enforced by the asset itself, not by the app.
+
+> 📹 **Demo video:** _[link — 3 minutes]_ · 🌐 **Program on devnet:** [`7Kmj…bxkTn`](https://explorer.solana.com/address/7KmjcBRHVjjhqxjihdJAFvfukbjhnNP82QPpVevbxkTn?cluster=devnet)
+
+## The user and the problem
+
+The user is the **compliance officer at a venue that wants to list tokenized U.S. stocks legally**. Today, "only verified U.S. persons may hold this security" is a rule enforced in a database: once a token leaves the venue's app, nothing stops it from moving to a sanctioned wallet, a lending pool, or an offshore account. Regulators know this, which is why tokenized-stock venues are stuck with either no compliance or no composability.
+
+## What this is
+
+A working venue for `tNVDA` (tokenized NVIDIA) against Circle USDC, where every rule is enforced on-chain and every action leaves an auditable, signed record:
+
+- **The rule is in the token.** `tNVDA` is a Token-2022 mint with a transfer hook. Solana calls our program on **every** transfer, from any wallet or app, and refuses to move tokens unless the receiver is a KYC-cleared, non-sanctioned U.S. person and trading isn't halted. Not "our app checks" — the network checks.
+- **Compliant settlement.** Buy or sell in one atomic transaction (USDC ⇄ tNVDA), built as a Solana Pay request and signed in Phantom. Fails as a whole if the hook says no.
+- **A real operator's console.** Whitelist, sanction, halt trading with one click; a Tier 1 volume-cap monitor that halts automatically; a simulated primary-exchange (Nasdaq) halt feed driving real on-chain halts.
+- **Regulatory reporting that proves itself.** Daily / CAT-style T+1 / monthly / quarterly reports with a trade blotter, order lifecycle events, rejected orders, volume-cap tracking and halt log — SHA-256 hashed, chained, and Ed25519-signed by the venue key, verifiable in the browser.
+- **An investor app** that hides all of the above: eligibility, portfolio and P&L, a plain-language ticket, add funds by card (MoonPay), statements.
+- **Public tape and disclosures.** Every trade published within seconds (10-minute rule), plus the SEC-required public notice.
+
+## Why Solana
+
+Token-2022 transfer hooks are the only mainstream primitive that lets an issuer attach enforceable transfer logic to a fungible asset, so compliance travels with the token into any wallet or protocol. Atomic multi-instruction transactions give delivery-versus-payment settlement in ~2 seconds with no counterparty risk. And it's cheap enough that per-trade compliance checks and per-trade public reporting are free.
+
+## What's real and what's simulated
+
+| Real, on devnet | Simulated / prototype |
+|---|---|
+| Transfer hook enforcement on every tNVDA transfer | Primary-exchange (Nasdaq) halt feed — button-driven |
+| Admin-only KYC, sanctions, halt; auto-halt on cap breach | NVDA ADV benchmark — configured value, not a market-data feed |
+| Atomic USDC⇄tNVDA settlement signed in Phantom | Fixed reference price (no AMM curve yet) |
+| Signed, chained regulatory reports; CAT-style order events | MoonPay sandbox purchases don't deliver devnet USDC |
+| Public trade tape with reporting latency | Corporate actions, Travel Rule, dividends — not built |
+
+## Roadmap
+
+AMM pool with published curve → live LULD/MWCB feed → Travel Rule messaging → corporate-actions pass-through → mainnet with a licensed operator.
+
+---
 
 Everything below is live on **Solana devnet**.
 
@@ -108,6 +142,10 @@ npx ts-node --transpile-only scripts/demo-revert.ts
 4. Execute swap → confirmed; appears on the trade tape within seconds with an explorer link.
 5. `npm run halt -- on` → swap → `TradingHalted`. `npm run halt -- off` → swap → confirmed.
 6. MoonPay panel: buy USDC with a sandbox card, delivered to the connected wallet.
+
+## Attribution
+
+Built by Tim Fitzpatrick for Solana Dev Day. Open-source components: Anchor, `@solana/web3.js`, `@solana/spl-token`, SPL transfer-hook interface, Express. MoonPay (sandbox) and Circle devnet USDC for on-ramp and settlement. Developed with AI pair-programming assistance (Claude); all design decisions, deployment and testing by the author.
 
 ## Notes and limitations
 
