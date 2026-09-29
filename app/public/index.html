@@ -1,0 +1,210 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>TSV Compliant Swap</title>
+<link rel="icon" href="/icon.svg">
+<script src="https://unpkg.com/@solana/web3.js@1.98.0/lib/index.iife.min.js"></script>
+<style>
+  :root { --bg:#0b1220; --card:#121a2b; --line:#233049; --text:#e6edf7; --muted:#8a9bb8; --ok:#4ade80; --bad:#f87171; --warn:#fbbf24; --accent:#60a5fa; }
+  * { box-sizing:border-box; }
+  body { margin:0; background:var(--bg); color:var(--text); font:15px/1.5 -apple-system,BlinkMacSystemFont,"Segoe UI",Inter,sans-serif; }
+  header { display:flex; align-items:center; justify-content:space-between; padding:16px 24px; border-bottom:1px solid var(--line); }
+  header h1 { font-size:18px; margin:0; letter-spacing:.2px; }
+  header h1 span { color:var(--muted); font-weight:400; }
+  main { max-width:1100px; margin:0 auto; padding:24px 16px; display:grid; gap:20px; grid-template-columns:minmax(0,1fr) minmax(0,1fr); }
+  @media (max-width:860px){ main{ grid-template-columns:1fr; } }
+  .card { min-width:0; background:var(--card); border:1px solid var(--line); border-radius:14px; padding:20px; }
+  .card h2 { margin:0 0 12px; font-size:15px; text-transform:uppercase; letter-spacing:.8px; color:var(--muted); }
+  .full { grid-column:1 / -1; }
+  button { background:var(--accent); color:#04111f; border:0; border-radius:10px; padding:12px 18px; font-weight:600; font-size:15px; cursor:pointer; }
+  button.secondary { background:transparent; color:var(--text); border:1px solid var(--line); }
+  button:disabled { opacity:.5; cursor:not-allowed; }
+  input { background:#0b1220; color:var(--text); border:1px solid var(--line); border-radius:10px; padding:12px; font-size:18px; width:100%; }
+  .row { display:flex; gap:12px; align-items:center; flex-wrap:wrap; }
+  .badge { display:inline-block; padding:4px 10px; border-radius:999px; font-size:12px; font-weight:600; border:1px solid var(--line); }
+  .ok { color:var(--ok); border-color:var(--ok); } .bad { color:var(--bad); border-color:var(--bad); } .warn { color:var(--warn); border-color:var(--warn); }
+  .mono { font-family:ui-monospace,SFMono-Regular,Menlo,monospace; font-size:13px; }
+  .muted { color:var(--muted); }
+  #log { word-break:break-all; overflow-wrap:anywhere; background:#070c16; border:1px solid var(--line); border-radius:10px; padding:12px; min-height:90px; max-height:260px; overflow:auto; white-space:pre-wrap; }
+  table { width:100%; border-collapse:collapse; font-size:14px; }
+  th, td { text-align:left; padding:10px 8px; border-bottom:1px solid var(--line); }
+  th { color:var(--muted); font-weight:500; font-size:12px; text-transform:uppercase; letter-spacing:.6px; }
+  td a { color:var(--accent); text-decoration:none; }
+  .tape-wrap { max-height:340px; overflow:auto; }
+  .kv { display:grid; grid-template-columns:auto 1fr; gap:6px 14px; font-size:14px; }
+  iframe { width:100%; height:560px; border:0; border-radius:10px; background:#fff; }
+  .pulse { animation:pulse 1.2s ease-in-out infinite; } @keyframes pulse { 50% { opacity:.4; } }
+</style>
+</head>
+<body>
+<header>
+  <h1>TSV Compliant Swap <span>· tNVDA / USDC · Solana devnet</span></h1>
+  <div class="row">
+    <span id="walletBadge" class="badge">No wallet</span>
+    <button id="connectBtn">Connect wallet</button>
+  </div>
+</header>
+
+<main>
+  <section class="card">
+    <h2>1 · Fund with USDC (MoonPay sandbox)</h2>
+    <p class="muted">A verified U.S. person buys USDC with a test card. Sandbox purchases are simulated and don't settle on devnet; use <a href="https://faucet.circle.com" target="_blank" style="color:var(--accent)">faucet.circle.com</a> for real devnet USDC.</p>
+    <div id="moonpay"><p class="muted">Connect a wallet to load the MoonPay widget.</p></div>
+  </section>
+
+  <section class="card">
+    <h2>2 · Execute compliant swap</h2>
+    <div class="kv" style="margin-bottom:14px">
+      <span class="muted">Compliance status</span><span id="kyc" class="badge">—</span>
+      <span class="muted">Price</span><span id="price">—</span>
+      <span class="muted">USDC balance</span><span id="usdcBal">—</span>
+      <span class="muted">tNVDA balance</span><span id="tnvdaBal">—</span>
+    </div>
+    <label class="muted" for="usdc">USDC to spend</label>
+    <input id="usdc" type="number" min="1" step="1" value="100">
+    <p style="margin:8px 0 14px">You receive <b id="out">—</b> tNVDA</p>
+    <div class="row">
+      <button id="swapBtn" disabled>Execute Compliant Swap</button>
+      <button id="refreshBtn" class="secondary">Refresh</button>
+    </div>
+    <p class="muted" style="margin-top:14px">One atomic transaction: your USDC → treasury, treasury tNVDA → you. The tNVDA leg runs through the on-chain compliance hook; if you're not whitelisted, the <em>entire</em> transaction is rejected by the network.</p>
+    <div id="log" class="mono">Ready.</div>
+  </section>
+
+  <section class="card full">
+    <h2>3 · Public trade tape <span class="muted" style="text-transform:none;letter-spacing:0">(SEC 10-minute reporting · auto-refreshes)</span></h2>
+    <div class="tape-wrap">
+      <table>
+        <thead><tr><th>Executed (UTC)</th><th>Wallet</th><th>USDC in</th><th>tNVDA out</th><th>USD price</th><th>Reported after</th><th>Signature</th></tr></thead>
+        <tbody id="tape"><tr><td colspan="7" class="muted">No trades yet.</td></tr></tbody>
+      </table>
+    </div>
+  </section>
+</main>
+
+<script>
+const { Connection, PublicKey, Transaction } = solanaWeb3;
+const RPC = "https://api.devnet.solana.com";
+const conn = new Connection(RPC, "confirmed");
+const TOKEN_2022 = new PublicKey("TokenzQdBNbLqP5VEhdkAS6EPFLC1PHnBqCXEpPxuEb");
+const TOKEN = new PublicKey("TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA");
+let cfg, wallet = null, pubkey = null;
+const $ = (id) => document.getElementById(id);
+const log = (m) => { $("log").textContent += "\n" + m; $("log").scrollTop = 1e9; };
+const short = (s) => s.slice(0,4) + "…" + s.slice(-4);
+const txLink = (sig) => `https://explorer.solana.com/tx/${sig}?cluster=devnet`;
+
+function getProvider() {
+  if (window.backpack?.solana) return window.backpack.solana;
+  if (window.phantom?.solana?.isPhantom) return window.phantom.solana;
+  if (window.solana) return window.solana;
+  return null;
+}
+
+async function connect() {
+  wallet = getProvider();
+  if (!wallet) { alert("No Solana wallet found. Install Phantom or Backpack and switch it to Devnet."); return; }
+  const r = await wallet.connect();
+  pubkey = new PublicKey((r?.publicKey ?? wallet.publicKey).toString());
+  $("walletBadge").textContent = short(pubkey.toBase58());
+  $("walletBadge").className = "badge ok";
+  $("connectBtn").textContent = "Connected";
+  $("swapBtn").disabled = false;
+  loadMoonPay();
+  await refresh();
+}
+
+async function tokenBalance(mint, program) {
+  try {
+    const r = await conn.getParsedTokenAccountsByOwner(pubkey, { mint: new PublicKey(mint), programId: program });
+    return r.value[0]?.account.data.parsed.info.tokenAmount.uiAmountString ?? "0";
+  } catch { return "0"; }
+}
+
+async function refresh() {
+  if (!pubkey) return;
+  const k = await fetch(`/api/kyc/${pubkey.toBase58()}`).then(r => r.json());
+  const el = $("kyc");
+  if (!k.exists) { el.textContent = "NOT WHITELISTED (no compliance profile)"; el.className = "badge bad"; }
+  else if (k.compliant) { el.textContent = "WHITELISTED · US person · KYC cleared"; el.className = "badge ok"; }
+  else { el.textContent = `BLOCKED · ${k.isOfacSanctioned ? "OFAC sanctioned" : !k.isUsPerson ? "not a US person" : "KYC not cleared"}`; el.className = "badge bad"; }
+  $("usdcBal").textContent = await tokenBalance(cfg.usdcMint, TOKEN);
+  $("tnvdaBal").textContent = await tokenBalance(cfg.tnvdaMint, TOKEN_2022);
+}
+
+function updateOut() {
+  const u = Number($("usdc").value || 0);
+  $("out").textContent = cfg ? (u / cfg.priceUsdcPerTnvda).toFixed(6).replace(/\.?0+$/, "") : "—";
+}
+
+async function swap() {
+  const usdc = Number($("usdc").value);
+  $("swapBtn").disabled = true;
+  try {
+    log(`\n▶ Requesting swap: ${usdc} USDC → tNVDA (Solana Pay transaction request)`);
+    const r = await fetch(`/api/swap?usdc=${usdc}`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ account: pubkey.toBase58() }) }).then(r => r.json());
+    if (r.error || !r.transaction) throw new Error(r.error ?? "server did not return a transaction");
+    log(`  ${r.message}`);
+    log(r.preview.ok ? `  Pre-flight simulation: OK, hook would ALLOW` : `  Pre-flight simulation: network would REVERT → ${r.preview.reason}`);
+    log(`  Sending to wallet for signature…`);
+    const tx = Transaction.from(Uint8Array.from(atob(r.transaction), c => c.charCodeAt(0)));
+    const { signature } = await wallet.signAndSendTransaction(tx);
+    log(`  Submitted ${signature}`);
+    await conn.confirmTransaction(signature, "confirmed");
+    log(`✔ CONFIRMED on devnet: ${txLink(signature)}`);
+  } catch (e) {
+    const logs = e.logs ?? e.transactionLogs ?? [];
+    const reason = logs.find(l => l.includes("Error Code")) ?? e.message;
+    log(`✖ REJECTED: ${reason}`);
+  } finally {
+    $("swapBtn").disabled = false;
+    refresh(); loadTape();
+  }
+}
+
+async function loadMoonPay() {
+  const box = $("moonpay");
+  if (!cfg.moonpayPublishableKey) { box.innerHTML = `<p class="warn">MoonPay key not set. Add <span class="mono">MOONPAY_PUBLISHABLE_KEY=pk_test_…</span> to <span class="mono">app/.env</span> and restart the server.</p>`; return; }
+  // MoonPay binds signed URLs to the customer's public IP, so look ours up first.
+  // MoonPay binds signed URLs to the customer's public IP. Look up both our IPv4 and IPv6
+  // addresses; the server asks MoonPay which one it actually sees us from.
+  const lookup = (u) => fetch(u).then(r => r.json()).then(j => j.ip).catch(() => "");
+  const ips = (await Promise.all([lookup("https://api64.ipify.org?format=json"), lookup("https://api.ipify.org?format=json")])).filter(Boolean);
+  const r = await fetch(`/api/moonpay-url?wallet=${pubkey.toBase58()}&ips=${encodeURIComponent(ips.join(","))}`).then(r => r.json());
+  const note = r.signed ? "" : `<p class="muted" style="margin:0 0 8px">Wallet address not pre-filled (add <span class="mono">MOONPAY_SECRET_KEY</span> to sign URLs). Paste <span class="mono">${pubkey.toBase58()}</span> when asked.</p>`;
+  box.innerHTML = `${note}<iframe allow="accelerometer; autoplay; camera; gyroscope; payment" src="${r.url}"></iframe>`;
+}
+
+async function loadTape() {
+  const rows = await fetch("/api/tape").then(r => r.json());
+  const body = $("tape");
+  if (!rows.length) { body.innerHTML = `<tr><td colspan="7" class="muted">No trades yet.</td></tr>`; return; }
+  body.innerHTML = rows.map(t => `<tr>
+    <td>${new Date(t.blockTime * 1000).toISOString().replace("T"," ").slice(0,19)}</td>
+    <td class="mono">${t.buyerMasked}</td>
+    <td>${t.usdcIn.toLocaleString(undefined,{maximumFractionDigits:6})}</td>
+    <td>${t.tnvdaOut.toLocaleString(undefined,{maximumFractionDigits:6})}</td>
+    <td>$${(t.usdcIn / t.tnvdaOut).toFixed(2)}</td>
+    <td class="${t.backfilled ? "muted" : t.latencySec <= 600 ? "ok" : "bad"}">${t.backfilled ? "back-filled" : t.latencySec + "s"}</td>
+    <td class="mono"><a href="${txLink(t.signature)}" target="_blank">${short(t.signature)}</a></td>
+  </tr>`).join("");
+}
+
+(async () => {
+  cfg = await fetch("/api/config").then(r => r.json());
+  $("price").textContent = `${cfg.priceUsdcPerTnvda} USDC per tNVDA`;
+  updateOut();
+  $("usdc").addEventListener("input", updateOut);
+  $("connectBtn").onclick = connect;
+  $("swapBtn").onclick = swap;
+  $("refreshBtn").onclick = () => { refresh(); loadTape(); };
+  loadTape(); setInterval(loadTape, 8000);
+  // Auto-reconnect a wallet that already approved this site (e.g. after a page reload).
+  const p = getProvider();
+  if (p) { try { await p.connect({ onlyIfTrusted: true }); await connect(); } catch {} }
+})();
+</script>
+</body>
+</html>

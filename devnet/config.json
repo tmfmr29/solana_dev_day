@@ -1,0 +1,11 @@
+{
+  "programId": "7KmjcBRHVjjhqxjihdJAFvfukbjhnNP82QPpVevbxkTn",
+  "tnvdaMint": "6RhaBrNoX8iEUiE7iXjpbTbK3UHsYLJhBGX5H6fBcbgc",
+  "usdcMint": "4zMMC9srt5Ri5X14GAgXhaHii3GnPAEERYPJgZJDncDU",
+  "treasury": "5Wzrjp7PJXbh7koDibHP9hkeV8J2b1QdXzuEo6W6SfR3",
+  "treasuryTnvdaAta": "DQrS3XJZe4NorYsUjFj4xnz8hV3sE5Ea5EvV48ZFkwMR",
+  "treasuryUsdcAta": "T67LzGMCFtmZ2jp2mhmxpR4rZpfr3J3f7WCqJALGwZF",
+  "usdcTokenProgram": "TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA",
+  "extraAccountMetaList": "EYFGvmvo1VKeLZzuVDFgwFno7FfrCQpfuuiVcfqNUQUc",
+  "priceUsdcPerTnvda": 100
+}

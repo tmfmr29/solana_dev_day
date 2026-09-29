@@ -1,0 +1,14 @@
+
+**/*.rs.bk
+*.log
+.DS_Store
+.anchor
+.surfpool
+.yarn
+app/.env
+devnet/*mint*.json
+devnet/buyer.json
+devnet/tnvda-mint.json
+node_modules
+target
+test-ledger
