@@ -30,6 +30,29 @@ Everything below is live on **Solana devnet**.
 4. **10-minute reporting tape.** An indexer watches the treasury and publishes each trade
    (masked wallet, USDC in, tNVDA out, USD price, reporting latency, tx signature) within seconds.
 
+## Pages
+
+| Page | Who | What |
+|---|---|---|
+| `/investor.html` | investor | Eligibility, portfolio & P&L, buy/sell ticket with pre-trade compliance check, add funds (MoonPay / receive USDC), activity + CSV statement |
+| `/admin.html` | compliance officer | KYC flags & sanctions per wallet, trading halt, Tier 1 volume-cap monitor (auto-halt), simulated primary-exchange halt feed, listing/issuer notice, regulatory report generation, audit trail |
+| `/reports.html` | compliance officer | Regulatory reports dashboard: period summary, daily activity, trade blotter, compliance events, rejected orders, volume cap & ADV tracking (monthly/quarterly), CAT-style daily order file, attestation with in-browser hash/signature/chain verification |
+| `/tape.html` | public | 10-minute trade tape with pool metrics; JSON/CSV feeds |
+| `/disclosures.html` | public | Public notice: operator, SEC disclaimer, permissioning criteria, fees, clearing, prohibited activity, halts, volume limits, MEV policy, records retention |
+| `/` | engineering | Original demo view with pre-flight logs, venue metrics and tape |
+
+## Regulatory reporting
+
+Reports are generated on demand (today / yesterday / month / quarter / custom range) or on schedule:
+20:00 ET daily end-of-day, 07:30 ET CAT T+1 file for the prior day, 1st of month 07:45 ET monthly (quarterly on Jan/Apr/Jul/Oct).
+Each package under `devnet/reports/<id>/` holds `report.html` (print view), `report.json` (signed envelope), and CSV tables
+(trade blotter, daily summary, compliance events, rejected orders, CAT daily file, volume cap monthly + log).
+Every swap request is an **order** with an ID written into the transaction as a memo, so executions link back to origination
+(MENO → MEOR → MEOT, or MEOC on rejection/expiry). Reports are SHA-256 hashed, chained to the previous report, and Ed25519-signed
+by the venue admin key; the dashboard verifies all three in the browser.
+
+Set `RPC_URL` in `app/.env` to a dedicated devnet endpoint (e.g. Helius) — the public RPC rate-limits and will block a busy demo.
+
 ## Repository layout
 
 ```
@@ -67,7 +90,7 @@ npm run setup:devnet                    # config, tNVDA mint, hook wiring, treas
 npm run kyc -- <WALLET>                 # whitelist an investor wallet (admin only)
 npm run halt -- on|off|status           # trading halt
 
-cp app/.env.example app/.env            # add MoonPay sandbox keys (optional)
+cp app/.env.example app/.env            # add MoonPay sandbox keys and RPC_URL
 npm start                               # dashboard at http://localhost:3000
 ```
 

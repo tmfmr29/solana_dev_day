@@ -14,6 +14,8 @@
 - [ ] Terminal window B:  `cd ~/tsv_swap` (fallback only)
 - [ ] Browser window 1 (left half of screen): http://localhost:3000, wallet connected
 - [ ] Browser window 2 (right half): http://localhost:3000/admin.html — the compliance officer's console
+- [ ] Extra tabs ready: http://localhost:3000/reports.html and http://localhost:3000/investor.html
+- [ ] `app/.env` has `RPC_URL` set to your Helius endpoint (public RPC will throttle a live demo)
 - [ ] Browser tab 2: program on Explorer
       https://explorer.solana.com/address/7KmjcBRHVjjhqxjihdJAFvfukbjhnNP82QPpVevbxkTn?cluster=devnet
 - [ ] Browser tab 3: tNVDA mint on Explorer (shows the Transfer Hook extension)
@@ -34,6 +36,8 @@
 | 8 | Admin console: **Resume trading** (say nothing, just reset) | |
 | 9 | MoonPay panel → Sign in → amount → Apple Pay sheet | "Fiat on-ramp: verified U.S. person buys USDC by card, delivered to the same wallet." Close at the order screen. |
 | 10 | Tab 2 (program) → Transaction History | "Everything you just saw, on-chain, with the three instructions per swap visible." |
+| 11 | Reports dashboard (`/reports.html`) → **Since last** → open it | "Every order, execution, rejection and halt from the last five minutes, as a signed regulatory report: blotter, CAT-style order events, volume-cap tracking. Click Verify." |
+| 12 | Investor app (`/investor.html`) | "And this is what the investor actually sees: eligibility, portfolio, a plain-language ticket. No hex, no logs." |
 
 ## If something breaks
 
